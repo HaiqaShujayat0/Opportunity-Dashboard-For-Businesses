@@ -1,3 +1,4 @@
 from .client import DataForSEOClient
+from .connector import DataForSEOConnector
 
-__all__ = ['DataForSEOClient']
+__all__ = ['DataForSEOClient', 'DataForSEOConnector']
