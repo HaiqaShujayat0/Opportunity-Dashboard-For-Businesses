@@ -59,6 +59,8 @@ class Run(models.Model):
     # --- Reproducibility ---
     settings_snapshot = models.JSONField(
         default=dict,
+        null=True,
+        blank=True,
         help_text="Frozen copy of EngineSettings + ScoringWeights at run start.",
     )
 
@@ -108,6 +110,7 @@ class RunStage(models.Model):
     STAGE_CHOICES = [
         ("plan", "Stage 0 — Plan"),
         ("ingest", "Stage 1 — Ingest"),
+        ("sitemap", "Stage 1b - Sitemap"),
         ("normalise", "Stage 2 — Normalise"),
         ("enrich", "Stage 3 — Enrich"),
         ("cluster", "Stage 4 — Cluster"),
@@ -126,6 +129,7 @@ class RunStage(models.Model):
             ("pending", "Pending"),
             ("running", "Running"),
             ("complete", "Complete"),
+            ("partial", "Partial"),
             ("failed", "Failed"),
             ("skipped", "Skipped"),
         ],

@@ -41,6 +41,11 @@ class Topic(models.Model):
     first_seen_run = models.ForeignKey(
         "runs.Run", null=True, blank=True, on_delete=models.SET_NULL, related_name="topics_found"
     )
+    last_seen_run = models.ForeignKey(
+        "runs.Run", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="topics_last_seen",
+        help_text="Most recent pipeline run in which this stable topic was produced.",
+    )
     
     # In production: centroid = VectorField(dimensions=768, null=True)
     centroid_blob = models.BinaryField(null=True, blank=True)
@@ -68,6 +73,12 @@ class TopicKeyword(models.Model):
 
     class Meta:
         ordering = ["-is_primary", "-search_volume"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["topic", "keyword"],
+                name="unique_topic_keyword",
+            ),
+        ]
 
     def __str__(self):
         return self.keyword

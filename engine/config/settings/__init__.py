@@ -11,19 +11,31 @@ https://docs.djangoproject.com/en/6.1/ref/settings/
 """
 
 from pathlib import Path
+import environ
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
-BASE_DIR = Path(__file__).resolve().parent.parent
+# settings/__init__.py → settings/ → config/ → engine/ (project root)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Read .env file from the engine/ directory (where manage.py lives)
+env = environ.Env(
+    DJANGO_DEBUG=(bool, True),
+)
+environ.Env.read_env(BASE_DIR / '.env')
 
 
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/6.1/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-hudikwzx5+iv&z(l7l%)7m47(m@yh(hp5s2+o6@eo_pa!44#q8'
+SECRET_KEY = env('DJANGO_SECRET_KEY', default='django-insecure-hudikwzx5+iv&z(l7l%)7m47(m@yh(hp5s2+o6@eo_pa!44#q8')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = env('DJANGO_DEBUG')
+
+# --- DataForSEO API Credentials ---
+DATAFORSEO_LOGIN = env('DATAFORSEO_LOGIN', default='')
+DATAFORSEO_PASSWORD = env('DATAFORSEO_PASSWORD', default='')
 
 ALLOWED_HOSTS = []
 
@@ -43,6 +55,7 @@ INSTALLED_APPS = [
     'apps.pages',
     'apps.topics',
     'apps.opportunities',
+    'apps.exports',
 ]
 
 MIDDLEWARE = [
@@ -81,7 +94,8 @@ WSGI_APPLICATION = 'config.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        # db.sqlite3 lives in engine/config/ — keep it there
+        'NAME': Path(__file__).resolve().parent.parent / 'db.sqlite3',
     }
 }
 
@@ -122,6 +136,9 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
+# Default primary key field type
+# Use BigAutoField (64-bit int) — KeywordObservation can easily hit millions of rows
+DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # Email
 # https://docs.djangoproject.com/en/6.1/topics/email/#topic-email-configuration

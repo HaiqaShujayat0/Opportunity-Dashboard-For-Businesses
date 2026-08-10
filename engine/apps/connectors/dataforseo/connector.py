@@ -26,26 +26,39 @@ class DataForSEOConnector(BaseConnector):
         self.client = DataForSEOClient(login, password)
 
     def _execute_and_log(self, endpoint: str, payload_list: List[Dict[str, Any]]) -> Dict[str, Any]:
-        """Core execution loop: Calls API -> Saves Raw JSON to SQLite -> Returns Raw JSON."""
-        # The payload is always a list with 1 dictionary in our use cases
-        params = payload_list[0] 
-        
+        """Core execution loop: Check cache → Call API → Save to DB → Return JSON."""
+        params = payload_list[0]
+
+        # 1. Check cache first — if we paid for this already, don't pay again
+        cached = self._check_cache(endpoint, params, ttl_hours=24)
+        if cached:
+            # Bugfix: If the cache hit is from an older Run, we MUST duplicate
+            # the RawFetch row for the *current* Run. Otherwise, downstream
+            # stages (which filter by run_id) will find no data and crash!
+            if cached.run_id != self.run.id:
+                self._log_fetch(
+                    endpoint=endpoint,
+                    params=params,
+                    payload=cached.payload,
+                    cost_usd=0.0  # Cache hit is free!
+                )
+            return cached.payload
+
         try:
-            # 1. Fetch raw json from the internet
+            # 2. Cache miss — make the live API call
             raw_response = self.client._post(endpoint, payload_list)
-            
-            # 2. Extract cost (DataForSEO returns this in the root JSON)
+
+            # 3. Extract cost (DataForSEO returns this in the root JSON)
             cost = raw_response.get("cost", 0.0)
-            
-            # 3. Permanently save to SQLite (RawFetch table)
+
+            # 4. Permanently save to database
             self._log_fetch(endpoint, params, raw_response, cost_usd=cost)
-            
+
             return raw_response
-            
+
         except Exception as e:
             logger.exception(f"DataForSEO API failed for endpoint: {endpoint}")
-            # If the API crashes (e.g. 500 error, or no money), we log the error string as the payload
-            # so we have an audit trail of why the pipeline failed.
+            # Save the error too — we need an audit trail of failures
             self._log_fetch(endpoint, params, {"error": str(e)}, cost_usd=0)
             raise
 

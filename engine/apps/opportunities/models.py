@@ -1,6 +1,7 @@
 from django.db import models
 
 
+
 class Opportunity(models.Model):
     """
     One row in the output Google Sheet — the final artifact of the whole pipeline.

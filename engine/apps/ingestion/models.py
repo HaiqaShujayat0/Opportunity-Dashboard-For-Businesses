@@ -150,6 +150,19 @@ class KeywordObservation(models.Model):
             models.Index(fields=["run", "market", "keyword_normalised"]),
             models.Index(fields=["market", "signal"]),
         ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "run",
+                    "market",
+                    "keyword_normalised",
+                    "source",
+                    "signal",
+                    "competitor_domain",
+                ],
+                name="unique_keyword_observation_identity",
+            ),
+        ]
 
     def __str__(self):
         return f"{self.keyword} [{self.signal}] — {self.market.code}"

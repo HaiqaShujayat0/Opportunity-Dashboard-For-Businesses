@@ -8,7 +8,7 @@ class TopicKeywordInline(admin.TabularInline):
 
 @admin.register(Topic)
 class TopicAdmin(admin.ModelAdmin):
-    list_display = ("label", "market", "primary_keyword", "total_search_volume", "category")
+    list_display = ("label", "market", "primary_keyword", "total_search_volume", "intent", "category")
     list_filter = ("market", "category")
     search_fields = ("label", "primary_keyword")
     inlines = [TopicKeywordInline]
