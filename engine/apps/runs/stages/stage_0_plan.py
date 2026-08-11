@@ -85,6 +85,11 @@ def run_stage_plan(run: Run) -> dict:
                 "max_serp_calls_per_run": engine_settings.max_serp_calls_per_run,
                 "quick_win_min_position": engine_settings.quick_win_min_position,
                 "quick_win_max_position": engine_settings.quick_win_max_position,
+                "decay_baseline_max_position": engine_settings.decay_baseline_max_position,
+                "decay_current_min_position": engine_settings.decay_current_min_position,
+                "decay_min_drop": engine_settings.decay_min_drop,
+                "decay_baseline_days": engine_settings.decay_baseline_days,
+                "decay_comparison_days": engine_settings.decay_comparison_days,
                 "serp_overlap_threshold": engine_settings.serp_overlap_threshold,
                 "semantic_similarity_threshold": engine_settings.semantic_similarity_threshold,
             }

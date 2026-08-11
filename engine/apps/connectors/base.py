@@ -46,7 +46,13 @@ class BaseConnector(ABC):
         Keys are sorted so dict ordering never affects the hash.
         """
         params_str = json.dumps(params, sort_keys=True)
-        raw_string = f"{self.source_name}|{endpoint}|{params_str}"
+        cache_namespace = getattr(self, "cache_namespace", "")
+        if cache_namespace:
+            raw_string = (
+                f"{self.source_name}|{cache_namespace}|{endpoint}|{params_str}"
+            )
+        else:
+            raw_string = f"{self.source_name}|{endpoint}|{params_str}"
         return hashlib.sha256(raw_string.encode("utf-8")).hexdigest()
 
     # ------------------------------------------------------------------

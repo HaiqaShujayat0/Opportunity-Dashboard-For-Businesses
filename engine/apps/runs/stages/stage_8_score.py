@@ -1,173 +1,123 @@
-"""
-Stage 8 -- SCORE
+"""Stage 8: deterministic six-factor priority scoring with graceful GA4 degradation."""
 
-What it does (in plain English):
-  This stage looks at all the Opportunities created in Stage 6 and gives
-  each one a "Priority Score" out of 100.
-
-  WHY this matters:
-  A client doesn't just want a list of 500 things to do. They want to
-  know what to do FIRST. This scoring system bubbles the biggest, easiest,
-  most profitable wins to the very top of the list.
-
-  How the score is calculated:
-  The score is a weighted average of:
-  - Search Volume (more volume = higher score)
-  - Keyword Difficulty (easier = higher score)
-  - Conversion Potential (transactional = higher score)
-  - Signals (e.g., Quick Wins are worth more than general research)
-"""
 import logging
+import math
+
 from django.utils import timezone
 
-from apps.opportunities.models import Opportunity
 from apps.clients.models import ScoringWeights
-from apps.runs.models import Run, RunStage
+from apps.opportunities.models import Opportunity
+from apps.runs.models import RunStage
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_SIGNAL_WEIGHTS = {
+    "ranking_decay": 1.0,
+    "quick_win": 0.95,
+    "conversion_proven": 0.9,
+    "competitor_gap": 0.8,
+    "cross_market": 0.75,
+    "keyword_research": 0.6,
+    "existing_ranking": 0.7,
+}
 
-def _normalize_volume(volume, max_volume):
-    """Normalize volume to a 0.0 - 1.0 scale."""
-    if not max_volume or volume <= 0:
+
+def _log_volume(volume, max_volume):
+    if volume <= 0 or max_volume <= 0:
         return 0.0
-    return min(1.0, volume / max_volume)
+    return min(1.0, math.log1p(volume) / math.log1p(max_volume))
 
 
-def _normalize_difficulty(difficulty_score):
-    """
-    Normalize difficulty to a 0.0 - 1.0 scale where EASIER is better.
-    A score of 10 (easy) becomes 0.9. A score of 90 (hard) becomes 0.1.
-    """
-    if difficulty_score is None:
-        return 0.5  # neutral fallback
-    return max(0.0, (100 - difficulty_score) / 100.0)
+def _difficulty(score):
+    return 0.5 if score is None else max(0.0, min(1.0, (100 - score) / 100))
 
 
-def _score_conversion_potential(potential):
-    """Assign a 0.0 - 1.0 score based on conversion potential."""
-    if potential == "High":
+def _position(position):
+    if position is None:
+        return 0.5
+    if position <= 3:
+        return 0.1
+    if position <= 10:
         return 1.0
-    elif potential == "Medium":
-        return 0.5
-    return 0.1
+    if position <= 20:
+        return 0.85
+    if position <= 50:
+        return 0.45
+    return 0.15
 
 
-def _score_signals(signals, signal_weights):
-    """
-    Assign a 0.0 - 1.0 score based on the highest value signal present.
-    If no weights are defined, default to 0.5.
-    """
-    if not signals or not signal_weights:
-        return 0.5
-    
-    max_val = 0.0
-    for s in signals:
-        val = signal_weights.get(s, 0.5)
-        if val > max_val:
-            max_val = val
-    return max_val
+def _conversion(opportunity):
+    rate = opportunity.decision_trace.get("conversion_rate")
+    if opportunity.conversion_basis == "data" and rate is not None:
+        return min(1.0, max(0.0, float(rate) / 0.05))
+    return None
+
+
+def _signal(signals, configured):
+    weights = {**DEFAULT_SIGNAL_WEIGHTS, **(configured or {})}
+    return max((float(weights.get(signal, 0.5)) for signal in signals), default=0.5)
+
+
+def _weighted_score(components, weights):
+    available = {name: value for name, value in components.items() if value is not None}
+    total_weight = sum(weights[name] for name in available)
+    if total_weight <= 0:
+        return 0.0
+    return sum(available[name] * weights[name] for name in available) / total_weight
 
 
 def run_stage_score(run):
-    """
-    Execute Stage 8 -- SCORE.
-
-    Assigns a priority_score (0-100) to each Opportunity based on
-    the client's custom ScoringWeights.
-
-    Returns:
-        Summary dict with counts.
-    """
-    logger.info(f"[Stage 8 -- SCORE] Starting for Run #{run.pk}")
-
-    opportunities = Opportunity.objects.filter(run=run)
-    total_opps = opportunities.count()
-
-    if total_opps == 0:
-        raise RuntimeError(
-            f"Run #{run.pk} has no Opportunities. Did Stage 6 (DECIDE) run first?"
-        )
-
-    # Fetch scoring weights for this client, or use defaults if missing
-    try:
-        weights = ScoringWeights.objects.get(client=run.client)
-    except ScoringWeights.DoesNotExist:
-        weights = ScoringWeights.objects.create(client=run.client)
-
-    # Find the maximum volume in this run to normalize against
-    max_vol_opp = opportunities.order_by("-topic__total_search_volume").first()
-    max_volume = max_vol_opp.topic.total_search_volume if max_vol_opp else 1
-
-    scored_count = 0
-    ignored_count = 0
-
-    for opp in opportunities.iterator():
-        if opp.action == "ignore":
-            opp.priority_score = 0.0
-            opp.confidence = 1.0
-            opp.save(update_fields=["priority_score", "confidence"])
-            ignored_count += 1
+    opportunities = Opportunity.objects.filter(run=run).select_related("topic", "market")
+    total = opportunities.count()
+    if total == 0:
+        raise RuntimeError(f"Run #{run.pk} has no Opportunities. Did Stage 6 (DECIDE) run first?")
+    weights, _ = ScoringWeights.objects.get_or_create(client=run.client)
+    max_volume = max(opportunity.topic.total_search_volume for opportunity in opportunities)
+    weight_map = {
+        "volume": weights.w_volume,
+        "position": weights.w_position_opportunity,
+        "conversion": weights.w_conversion,
+        "difficulty": weights.w_difficulty,
+        "signal": weights.w_signal,
+        "market": weights.w_market,
+    }
+    scored = ignored = 0
+    for opportunity in opportunities.iterator():
+        if opportunity.action == "ignore":
+            opportunity.priority_score = 0.0
+            opportunity.confidence = 1.0
+            opportunity.save(update_fields=["priority_score", "confidence"])
+            ignored += 1
             continue
+        market_score = float(weights.market_weights.get(opportunity.market.code, 1.0))
+        components = {
+            "volume": _log_volume(opportunity.topic.total_search_volume, max_volume),
+            "position": _position(opportunity.current_position),
+            "conversion": _conversion(opportunity),
+            "difficulty": _difficulty(opportunity.difficulty_score),
+            "signal": _signal(opportunity.why_flagged, weights.signal_weights),
+            "market": max(0.0, min(1.0, market_score)),
+        }
+        final = round(100 * _weighted_score(components, weight_map), 1)
+        source = opportunity.decision_trace.get("match_source")
+        confidence = 0.9 if source == "gsc_ranking" else 0.8 if source == "slug" else 0.7
+        trace = dict(opportunity.decision_trace)
+        trace["scoring"] = {
+            "components": components,
+            "weights": weight_map,
+            "missing_conversion_weight_redistributed": components["conversion"] is None,
+        }
+        opportunity.priority_score = final
+        opportunity.confidence = confidence
+        opportunity.decision_trace = trace
+        opportunity.save(update_fields=["priority_score", "confidence", "decision_trace"])
+        scored += 1
 
-        # 1. Normalize individual factors (0.0 to 1.0)
-        vol_score = _normalize_volume(
-            opp.topic.total_search_volume, max_volume
-        )
-        diff_score = _normalize_difficulty(
-            opp.difficulty_score
-        )
-        conv_score = _score_conversion_potential(
-            opp.conversion_potential
-        )
-        sig_score = _score_signals(
-            opp.why_flagged, weights.signal_weights
-        )
-
-        # 2. Apply weights
-        raw_score = (
-            (vol_score * weights.w_volume) +
-            (diff_score * weights.w_difficulty) +
-            (conv_score * weights.w_conversion) +
-            (sig_score * weights.w_signal)
-        )
-
-        # 3. Market modifier (if defined)
-        market_mod = weights.market_weights.get(opp.market.code, 1.0)
-        raw_score *= market_mod
-
-        # 4. Convert to 0-100 scale and clamp
-        final_score = round(min(100.0, max(0.0, raw_score * 100)), 1)
-        
-        # 5. Set confidence (placeholder for now)
-        confidence = 0.8
-
-        opp.priority_score = final_score
-        opp.confidence = confidence
-        opp.save(update_fields=["priority_score", "confidence"])
-        scored_count += 1
-
-    logger.info(
-        f"[Stage 8 -- SCORE] Done. "
-        f"Scored {scored_count} opportunities. "
-        f"Ignored {ignored_count}."
-    )
-
-    # Record stage completion
     RunStage.objects.update_or_create(
-        run=run,
-        name="score",
+        run=run, name="score",
         defaults={
-            "status": "complete",
-            "records_in": total_opps,
-            "records_out": scored_count,
-            "started_at": timezone.now(),
-            "finished_at": timezone.now(),
+            "status": "complete", "records_in": total, "records_out": scored,
+            "started_at": timezone.now(), "finished_at": timezone.now(), "error": "",
         },
     )
-
-    return {
-        "total_opportunities": total_opps,
-        "scored": scored_count,
-        "ignored": ignored_count,
-    }
+    return {"total_opportunities": total, "scored": scored, "ignored": ignored}

@@ -1,0 +1,25 @@
+{
+  "dimensionHeaders": [
+    {"name": "landingPagePlusQueryString"},
+    {"name": "sessionDefaultChannelGroup"}
+  ],
+  "metricHeaders": [
+    {"name": "sessions"},
+    {"name": "keyEvents"},
+    {"name": "purchaseRevenue"}
+  ],
+  "rows": [
+    {
+      "dimensionValues": [
+        {"value": "/shoes"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "1500"},
+        {"value": "45"},
+        {"value": "6750.00"}
+      ]
+    }
+  ],
+  "rowCount": 1
+}

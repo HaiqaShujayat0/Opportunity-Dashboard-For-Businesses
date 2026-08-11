@@ -37,6 +37,33 @@ DEBUG = env('DJANGO_DEBUG')
 DATAFORSEO_LOGIN = env('DATAFORSEO_LOGIN', default='')
 DATAFORSEO_PASSWORD = env('DATAFORSEO_PASSWORD', default='')
 
+# --- Google Sheets export ---
+# Fixture mode is deliberately the safe default. Set USE_DUMMY_SHEETS=False
+# only after configuring a service-account key and target spreadsheet.
+USE_DUMMY_SHEETS = env.bool('USE_DUMMY_SHEETS', default=True)
+GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = env(
+    'GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE', default=''
+)
+GOOGLE_SHEETS_SPREADSHEET_ID = env('GOOGLE_SHEETS_SPREADSHEET_ID', default='')
+SHEETS_MOCK_FILE = BASE_DIR / 'tests' / 'fixtures' / 'sheets_mock.json'
+
+# GSC/GA4 response fixtures remain the safe default. The live transport uses
+# a separate credential setting so Sheets and read-only analytics access can
+# be deployed or rotated independently.
+GOOGLE_USE_DUMMY_DATA = env.bool('GOOGLE_USE_DUMMY_DATA', default=True)
+GOOGLE_API_SERVICE_ACCOUNT_FILE = env(
+    'GOOGLE_API_SERVICE_ACCOUNT_FILE', default=''
+)
+GOOGLE_API_TIMEOUT_SECONDS = env.int('GOOGLE_API_TIMEOUT_SECONDS', default=60)
+
+# --- Background pipeline execution ---
+CELERY_BROKER_URL = env(
+    'CELERY_BROKER_URL', default='redis://localhost:6379/0'
+)
+CELERY_RESULT_BACKEND = env(
+    'CELERY_RESULT_BACKEND', default='redis://localhost:6379/0'
+)
+
 ALLOWED_HOSTS = []
 
 
@@ -92,11 +119,7 @@ WSGI_APPLICATION = 'config.wsgi.application'
 # https://docs.djangoproject.com/en/6.1/ref/settings/#databases
 
 DATABASES = {
-    'default': {
-        'ENGINE': 'django.db.backends.sqlite3',
-        # db.sqlite3 lives in engine/config/ — keep it there
-        'NAME': Path(__file__).resolve().parent.parent / 'db.sqlite3',
-    }
+    'default': env.db('DATABASE_URL')
 }
 
 

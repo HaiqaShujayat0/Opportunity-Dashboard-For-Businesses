@@ -1,0 +1,19 @@
+{
+  "rows": [
+    {
+      "keys": ["running shoes", "https://example.com/shoes", "gbr", "2026-07-15"],
+      "clicks": 450,
+      "impressions": 12000,
+      "ctr": 0.0375,
+      "position": 8.2
+    },
+    {
+      "keys": ["best running shoes", "https://example.com/shoes", "gbr", "2026-07-15"],
+      "clicks": 80,
+      "impressions": 4500,
+      "ctr": 0.0177777778,
+      "position": 14.3
+    }
+  ],
+  "responseAggregationType": "byPage"
+}

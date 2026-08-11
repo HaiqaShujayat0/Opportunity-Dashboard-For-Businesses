@@ -55,3 +55,41 @@ class ExistingPage(models.Model):
 
     def __str__(self):
         return self.path
+
+
+class PositionSnapshot(models.Model):
+    """Finalized daily GSC position data retained across pipeline runs."""
+
+    market = models.ForeignKey(
+        "clients.Market", on_delete=models.CASCADE, related_name="position_snapshots"
+    )
+    last_seen_run = models.ForeignKey(
+        "runs.Run", null=True, blank=True, on_delete=models.SET_NULL,
+        related_name="position_snapshots",
+    )
+    observed_on = models.DateField()
+    keyword = models.CharField(max_length=500)
+    keyword_normalised = models.CharField(max_length=500, db_index=True)
+    page_url = models.URLField(max_length=1000)
+    country = models.CharField(max_length=3)
+    clicks = models.FloatField(default=0)
+    impressions = models.FloatField(default=0)
+    ctr = models.FloatField(default=0)
+    position = models.FloatField()
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["market", "observed_on", "keyword_normalised", "page_url", "country"],
+                name="unique_daily_gsc_position",
+            )
+        ]
+        indexes = [
+            models.Index(fields=["market", "keyword_normalised", "observed_on"]),
+            models.Index(fields=["market", "page_url", "observed_on"]),
+        ]
+
+    def __str__(self):
+        return f"{self.keyword} @ {self.position} ({self.observed_on})"

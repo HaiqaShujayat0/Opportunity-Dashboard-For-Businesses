@@ -111,6 +111,7 @@ class KeywordObservation(models.Model):
 
     # --- Our own ranking data (from GSC) ---
     our_position = models.FloatField(null=True, blank=True)
+    previous_position = models.FloatField(null=True, blank=True)
     our_url = models.URLField(max_length=1000, blank=True)
     impressions = models.IntegerField(null=True, blank=True)
     clicks = models.IntegerField(null=True, blank=True)
@@ -159,6 +160,7 @@ class KeywordObservation(models.Model):
                     "source",
                     "signal",
                     "competitor_domain",
+                    "our_url",
                 ],
                 name="unique_keyword_observation_identity",
             ),

@@ -1,15 +1,28 @@
 import gzip
-from unittest.mock import Mock
+from datetime import date
+from decimal import Decimal
+from unittest.mock import Mock, patch
 
 import requests
-from django.test import TestCase
+from django.test import TestCase, override_settings
 
 from apps.clients.models import Client, Market
 from apps.connectors.sitemap import SitemapConnector, SitemapError
+from apps.connectors.ga4 import GA4Connector, GA4ConnectorError
+from apps.connectors.google_auth import (
+    GA4_READONLY_SCOPE,
+    GSC_READONLY_SCOPE,
+    GoogleTransportError,
+    ga4_live_executor,
+    get_google_session,
+    gsc_live_executor,
+)
+from apps.connectors.gsc import GSCConnector, GSCConnectorError
 from apps.ingestion.models import RawFetch
 from apps.pages.models import ExistingPage
 from apps.runs.models import Run, RunStage
 from apps.runs.stages.stage_1b_sitemap import run_stage_sitemap
+from apps.runs.stages.stage_1c_google import run_stage_google_ingest
 
 
 URLSET = b"""<?xml version="1.0" encoding="UTF-8"?>
@@ -121,3 +134,220 @@ class SitemapTests(TestCase):
         self.assertEqual(stage.status, "failed")
         self.assertIn("offline", stage.error)
         self.assertTrue(ExistingPage.objects.get().in_sitemap)
+
+
+class GoogleConnectorTests(TestCase):
+    def setUp(self):
+        client = Client.objects.create(
+            name="Google Fixture Client", slug="google-fixture-client", primary_domain="example.com"
+        )
+        self.market = Market.objects.create(
+            client=client, code="UK", country_iso="GB", language_code="en",
+            dataforseo_location_code=2826, gsc_property="sc-domain:example.com",
+            ga4_property_id="123456789", sitemap_url="https://example.com/sitemap.xml",
+        )
+        self.run = Run.objects.create(client=client)
+
+    def test_gsc_fixture_is_validated_and_audited(self):
+        rows = GSCConnector(self.run, self.market).fetch(
+            start_date=date(2026, 7, 1), end_date=date(2026, 7, 28)
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(rows[0].query, "running shoes")
+        self.assertEqual(rows[0].observed_on, date(2026, 7, 15))
+        raw = RawFetch.objects.get(run=self.run, source="gsc")
+        self.assertEqual(raw.request_params["dimensions"], ["query", "page", "country", "date"])
+        self.assertEqual(raw.request_params["dataState"], "final")
+        self.assertEqual(
+            raw.request_params["dimensionFilterGroups"][0]["filters"][0]["expression"],
+            "gbr",
+        )
+
+    def test_gsc_paginates_until_a_short_page(self):
+        calls = []
+
+        def execute(params):
+            calls.append(params["startRow"])
+            if params["startRow"] == 0:
+                return {"rows": [{
+                    "keys": ["shoes", "https://example.com/shoes", "gbr", "2026-07-15"],
+                    "clicks": 1, "impressions": 10, "ctr": 0.1, "position": 5,
+                }]}
+            return {"rows": []}
+
+        rows = GSCConnector(self.run, self.market, executor=execute, use_dummy=False).fetch(
+            start_date=date(2026, 7, 1), end_date=date(2026, 7, 28), row_limit=1
+        )
+
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(calls, [0, 1])
+        self.assertEqual(RawFetch.objects.filter(run=self.run, source="gsc").count(), 2)
+
+    def test_gsc_rejects_wrong_dimension_shape_and_logs_error(self):
+        connector = GSCConnector(
+            self.run, self.market,
+            executor=lambda params: {"rows": [{
+                "keys": ["missing", "dimensions"],
+                "clicks": 1, "impressions": 2, "ctr": 0.5, "position": 3,
+            }]},
+            use_dummy=False,
+        )
+        with self.assertRaises(GSCConnectorError):
+            connector.fetch(start_date=date(2026, 7, 1), end_date=date(2026, 7, 28))
+        self.assertIn("error", RawFetch.objects.get(source="gsc").payload)
+
+    def test_ga4_fixture_maps_values_by_response_headers_and_audits(self):
+        records = GA4Connector(self.run, self.market).fetch()
+
+        self.assertEqual(records, [{
+            "landingPagePlusQueryString": "/shoes",
+            "sessionDefaultChannelGroup": "Organic Search",
+            "sessions": Decimal("1500"),
+            "keyEvents": Decimal("45"),
+            "purchaseRevenue": Decimal("6750.00"),
+        }])
+        raw = RawFetch.objects.get(run=self.run, source="ga4")
+        self.assertEqual(raw.request_params["property"], "properties/123456789")
+        self.assertEqual(raw.request_params["metrics"][1]["name"], "keyEvents")
+
+    def test_ga4_rejects_mismatched_row_width_and_logs_error(self):
+        connector = GA4Connector(
+            self.run, self.market,
+            executor=lambda params: {
+                "dimensionHeaders": [{"name": "landingPagePlusQueryString"}],
+                "metricHeaders": [{"name": "sessions"}],
+                "rows": [{"dimensionValues": [], "metricValues": [{"value": "1"}]}],
+            },
+            use_dummy=False,
+        )
+        with self.assertRaises(GA4ConnectorError):
+            connector.fetch()
+        self.assertIn("error", RawFetch.objects.get(source="ga4").payload)
+
+    @override_settings(GOOGLE_API_SERVICE_ACCOUNT_FILE="C:/secure/google-key.json")
+    def test_service_account_session_uses_configured_file_and_scopes(self):
+        credentials = Mock()
+        authorized_session = Mock()
+        with (
+            patch("apps.connectors.google_auth.Path.is_file", return_value=True),
+            patch(
+                "apps.connectors.google_auth.Credentials.from_service_account_file",
+                return_value=credentials,
+            ) as credential_loader,
+            patch(
+                "apps.connectors.google_auth.AuthorizedSession",
+                return_value=authorized_session,
+            ),
+        ):
+            result = get_google_session([GSC_READONLY_SCOPE])
+
+        self.assertIs(result, authorized_session)
+        credential_loader.assert_called_once_with(
+            "C:\\secure\\google-key.json", scopes=[GSC_READONLY_SCOPE]
+        )
+
+    @override_settings(GOOGLE_API_TIMEOUT_SECONDS=45)
+    def test_live_executors_build_exact_urls_without_mutating_params(self):
+        response = Mock()
+        response.json.side_effect = [{"rows": []}, {"rows": []}]
+        session = Mock()
+        session.post.return_value = response
+        gsc_params = {
+            "siteUrl": "sc-domain:example.com",
+            "startDate": "2026-07-01",
+            "endDate": "2026-07-28",
+        }
+        ga4_params = {
+            "property": "properties/123456789",
+            "dateRanges": [{"startDate": "28daysAgo", "endDate": "today"}],
+        }
+        original_gsc = dict(gsc_params)
+        original_ga4 = dict(ga4_params)
+
+        gsc_live_executor(gsc_params, session=session)
+        ga4_live_executor(ga4_params, session=session)
+
+        self.assertEqual(gsc_params, original_gsc)
+        self.assertEqual(ga4_params, original_ga4)
+        gsc_call, ga4_call = session.post.call_args_list
+        self.assertEqual(
+            gsc_call.args[0],
+            "https://www.googleapis.com/webmasters/v3/sites/"
+            "sc-domain%3Aexample.com/searchAnalytics/query",
+        )
+        self.assertEqual(
+            gsc_call.kwargs,
+            {
+                "json": {"startDate": "2026-07-01", "endDate": "2026-07-28"},
+                "timeout": 45,
+            },
+        )
+        self.assertEqual(
+            ga4_call.args[0],
+            "https://analyticsdata.googleapis.com/v1beta/"
+            "properties/123456789:runReport",
+        )
+        self.assertEqual(
+            ga4_call.kwargs,
+            {
+                "json": {"dateRanges": ga4_params["dateRanges"]},
+                "timeout": 45,
+            },
+        )
+        self.assertNotIn("property", ga4_call.kwargs["json"])
+        self.assertEqual(response.raise_for_status.call_count, 2)
+
+    def test_live_http_errors_are_sanitized(self):
+        response = Mock()
+        http_error = requests.HTTPError("secret response body")
+        http_error.response = Mock(status_code=403)
+        response.raise_for_status.side_effect = http_error
+        session = Mock()
+        session.post.return_value = response
+
+        with self.assertRaisesMessage(
+            GoogleTransportError, "GSC API returned HTTP 403"
+        ) as raised:
+            gsc_live_executor({"siteUrl": "sc-domain:example.com"}, session=session)
+
+        self.assertNotIn("secret response body", str(raised.exception))
+
+    def test_live_cache_never_reuses_dummy_fixture_rows(self):
+        date_range = {"start_date": date(2026, 7, 1), "end_date": date(2026, 7, 28)}
+        GSCConnector(self.run, self.market, use_dummy=True).fetch(**date_range)
+        live_executor = Mock(return_value={"rows": []})
+
+        rows = GSCConnector(
+            self.run, self.market, executor=live_executor, use_dummy=False
+        ).fetch(**date_range)
+
+        self.assertEqual(rows, [])
+        live_executor.assert_called_once()
+        self.assertEqual(RawFetch.objects.filter(source="gsc").count(), 2)
+
+    @override_settings(GOOGLE_USE_DUMMY_DATA=False)
+    def test_stage_injects_live_executors_when_dummy_mode_is_disabled(self):
+        calls = []
+
+        class RecordingConnector:
+            def __init__(self, run, market, **kwargs):
+                calls.append(kwargs)
+
+            def fetch(self):
+                return []
+
+        self.run.settings_snapshot = {
+            "markets": [{"market_id": self.market.pk, "market_code": "UK"}]
+        }
+        self.run.save(update_fields=["settings_snapshot"])
+
+        summary = run_stage_google_ingest(
+            self.run,
+            gsc_connector_class=RecordingConnector,
+            ga4_connector_class=RecordingConnector,
+        )
+
+        self.assertEqual(summary["stage_status"], "complete")
+        self.assertEqual(calls[0], {"executor": gsc_live_executor, "use_dummy": False})
+        self.assertEqual(calls[1], {"executor": ga4_live_executor, "use_dummy": False})

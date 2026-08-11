@@ -1,4 +1,4 @@
-"""Export one pipeline run to a flat CSV file."""
+"""Export one pipeline run to CSV or Google Sheets."""
 
 import csv
 from pathlib import Path
@@ -7,23 +7,29 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.exports.builder import EXPORT_COLUMNS, build_opportunity_rows
 from apps.runs.models import Run
+from apps.runs.stages.stage_9_export import run_stage_export
 
 
 class Command(BaseCommand):
-    help = "Export a pipeline run's opportunities to CSV"
+    help = "Export a pipeline run's opportunities to CSV or Google Sheets"
 
     def add_arguments(self, parser):
         parser.add_argument("--run-id", type=int, required=True)
         parser.add_argument(
             "--format",
-            choices=["csv"],
+            choices=["csv", "sheets"],
             default="csv",
-            help="Export format. CSV is currently supported.",
+            help="Export format: csv or sheets.",
         )
         parser.add_argument(
             "--output",
             type=str,
             help="Output path. Defaults to run_<id>_opportunities.csv in the current directory.",
+        )
+        parser.add_argument(
+            "--spreadsheet-id",
+            type=str,
+            help="Override the configured Google spreadsheet ID for a sheets export.",
         )
 
     def handle(self, *args, **options):
@@ -32,6 +38,20 @@ class Command(BaseCommand):
             run = Run.objects.select_related("client").get(pk=run_id)
         except Run.DoesNotExist as exc:
             raise CommandError(f"Run #{run_id} does not exist.") from exc
+
+        if options["format"] == "sheets":
+            summary = run_stage_export(
+                run, spreadsheet_id=options.get("spreadsheet_id")
+            )
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Exported Run #{run_id} to Google Sheets spreadsheet "
+                    f"{summary['spreadsheet_id']} "
+                    f"({summary['opportunities']} actionable rows, "
+                    f"{summary['archived']} archived)."
+                )
+            )
+            return
 
         rows = build_opportunity_rows(run)
         if not rows:

@@ -23,18 +23,21 @@ from apps.runs.models import Run
 from apps.runs.stages.stage_0_plan import run_stage_plan
 from apps.runs.stages.stage_1_ingest import run_stage_ingest
 from apps.runs.stages.stage_1b_sitemap import run_stage_sitemap
+from apps.runs.stages.stage_1c_google import run_stage_google_ingest
 from apps.runs.stages.stage_2_normalise import run_stage_normalise
+from apps.runs.stages.stage_2b_analytics import run_stage_analytics
 from apps.runs.stages.stage_3_enrich import run_stage_enrich
 from apps.runs.stages.stage_4_cluster import run_stage_cluster
 from apps.runs.stages.stage_5_match import run_stage_match
 from apps.runs.stages.stage_6_decide import run_stage_decide
 from apps.runs.stages.stage_8_score import run_stage_score
+from apps.runs.stages.stage_9_export import run_stage_export
 
 logger = logging.getLogger(__name__)
 
 
 class Command(BaseCommand):
-    help = "Run the Engine 1 pipeline (Stages 0-8) for a given Run ID"
+    help = "Run the Engine 1 pipeline (Stages 0-9) for a given Run ID"
 
     def add_arguments(self, parser):
         parser.add_argument(
@@ -47,8 +50,8 @@ class Command(BaseCommand):
             "--stage",
             type=str,
             default="all",
-            choices=["all", "plan", "ingest", "sitemap", "normalise", "enrich", "cluster", "match", "decide", "score"],
-            help="Which stage to run. Default is 'all' (runs plan -> ingest -> normalise -> enrich -> cluster -> match -> decide -> score).",
+            choices=["all", "plan", "ingest", "sitemap", "google", "normalise", "analytics", "enrich", "cluster", "match", "decide", "score", "export"],
+            help="Which stage to run. Default is 'all' (runs the complete pipeline through export).",
         )
         parser.add_argument(
             "--serp-calls",
@@ -136,6 +139,21 @@ class Command(BaseCommand):
                 if sitemap_summary["stage_status"] == "partial":
                     had_partial_stage = True
 
+            # -- Stage 1c: GOOGLE -----------------------------------------
+            if stage in ("all", "google"):
+                self.stdout.write(self.style.HTTP_INFO(
+                    "\n> Stage 1c - GOOGLE (fetching configured GSC/GA4 data...)"
+                ))
+                google_summary = run_stage_google_ingest(run)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  [OK] GOOGLE {google_summary['stage_status']}\n"
+                    f"     Sources configured : {google_summary['configured_sources']}\n"
+                    f"     Sources successful : {google_summary['successful_sources']}\n"
+                    f"     RawFetch rows       : {google_summary['raw_fetches_created']}\n"
+                ))
+                if google_summary["stage_status"] == "partial":
+                    had_partial_stage = True
+
             # ── Stage 2: NORMALISE ───────────────────────────────────────
             if stage in ("all", "normalise"):
                 self.stdout.write(self.style.HTTP_INFO("\n> Stage 2 - NORMALISE (parsing RawFetch into KeywordObservations...)"))
@@ -146,6 +164,20 @@ class Command(BaseCommand):
                     f"     KeywordObservations     : {normalise_summary['observations_created']}\n"
                     f"     Existing rows updated  : {normalise_summary['observations_updated']}\n"
                     f"     Skipped (blank kws)     : {normalise_summary['observations_skipped']}\n"
+                ))
+
+            # -- Stage 2b: ANALYTICS --------------------------------------
+            if stage in ("all", "analytics"):
+                self.stdout.write(self.style.HTTP_INFO(
+                    "\n> Stage 2b - ANALYTICS (normalising GSC/GA4 data...)"
+                ))
+                analytics_summary = run_stage_analytics(run)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  [OK] ANALYTICS complete\n"
+                    f"     RawFetch rows       : {analytics_summary['raw_fetches_processed']}\n"
+                    f"     GSC snapshots new   : {analytics_summary['gsc']['snapshots_created']}\n"
+                    f"     GSC observations    : {analytics_summary['gsc']['observations_created']}\n"
+                    f"     GA4 pages updated   : {analytics_summary['ga4']['pages_updated']}\n"
                 ))
 
             # ── Stage 3: ENRICH ──────────────────────────────────────────
@@ -208,6 +240,7 @@ class Command(BaseCommand):
                     f"  " + chr(9989) + f" DECIDE complete\n"
                     f"     New content    : {decide_summary['new_content']}\n"
                     f"     Optimise       : {decide_summary['optimise']}\n"
+                    f"     Merge          : {decide_summary['merge']}\n"
                     f"     Ignored        : {decide_summary['ignore']}\n"
                 ))
 
@@ -222,6 +255,21 @@ class Command(BaseCommand):
                     f"  " + chr(9989) + f" SCORE complete\n"
                     f"     Scored         : {score_summary['scored']}\n"
                     f"     Ignored        : {score_summary['ignored']}\n"
+                ))
+
+            # -- Stage 9: EXPORT ------------------------------------------
+            if stage in ("all", "export"):
+                self.stdout.write(self.style.HTTP_INFO(
+                    "\n" + chr(9654) + " Stage 9 -- EXPORT "
+                    "(merge-writing the Google Sheets deliverable...)"
+                ))
+                export_summary = run_stage_export(run)
+                self.stdout.write(self.style.SUCCESS(
+                    f"  " + chr(9989) + f" EXPORT complete\n"
+                    f"     Opportunities : {export_summary['opportunities']}\n"
+                    f"     Ignored       : {export_summary['ignored']}\n"
+                    f"     Merge URLs    : {export_summary['cannibalisation_rows']}\n"
+                    f"     Archived      : {export_summary['archived']}\n"
                 ))
 
             # -- All done --------------------------------------------------
