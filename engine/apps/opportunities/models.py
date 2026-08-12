@@ -82,6 +82,7 @@ class Opportunity(models.Model):
         unique_together = [("run", "topic")]
         # We always want to read these sorted by highest priority score
         indexes = [models.Index(fields=["run", "-priority_score"])]
+        verbose_name_plural = "Opportunities"
 
     def __str__(self):
         return f"{self.action.upper()} - {self.topic.label} ({self.priority_score})"

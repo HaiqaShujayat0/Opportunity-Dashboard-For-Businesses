@@ -4,6 +4,15 @@ class Client(models.Model):
     name = models.CharField(max_length=200)
     slug = models.SlugField(unique=True)
     primary_domain = models.CharField(max_length=255)
+    google_sheets_spreadsheet_id = models.CharField(
+        "Google Sheets spreadsheet ID",
+        max_length=255,
+        blank=True,
+        help_text=(
+            "Destination Google spreadsheet ID for this client's recurring exports. "
+            "Use the value between /d/ and /edit in the Google Sheets URL."
+        ),
+    )
     is_active = models.BooleanField(default=True)
 
     def __str__(self):
@@ -83,6 +92,10 @@ class EngineSettings(models.Model):
     max_serp_calls_per_run = models.IntegerField(default=5000)
     max_spend_per_run_usd = models.DecimalField(max_digits=8, decimal_places=2, default=100)
 
+    class Meta:
+        verbose_name = "engine settings"
+        verbose_name_plural = "engine settings"
+
 
 class ScoringWeights(models.Model):
     """Priority score weights, separated so they can be tuned without touching thresholds."""
@@ -93,5 +106,9 @@ class ScoringWeights(models.Model):
     w_difficulty = models.FloatField(default=0.15)
     w_signal = models.FloatField(default=0.10)
     w_market = models.FloatField(default=0.10)
-    signal_weights = models.JSONField(default=dict)   
-    market_weights = models.JSONField(default=dict)   
+    signal_weights = models.JSONField(default=dict, blank=True)   
+    market_weights = models.JSONField(default=dict, blank=True)   
+
+    class Meta:
+        verbose_name = "scoring weights"
+        verbose_name_plural = "scoring weights"

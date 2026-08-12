@@ -18,6 +18,13 @@ from apps.connectors.google_auth import (
     gsc_live_executor,
 )
 from apps.connectors.gsc import GSCConnector, GSCConnectorError
+from apps.connectors.sheets.provisioner import (
+    DRIVE_FILES_URL,
+    DRIVE_SCOPE,
+    DriveProvisioningError,
+    DriveSpreadsheetProvisioner,
+    SPREADSHEET_MIME_TYPE,
+)
 from apps.ingestion.models import RawFetch
 from apps.pages.models import ExistingPage
 from apps.runs.models import Run, RunStage
@@ -36,6 +43,99 @@ INDEX = b"""<?xml version="1.0" encoding="UTF-8"?>
   <sitemap><loc>https://example.com/products.xml</loc></sitemap>
   <sitemap><loc>https://example.com/products.xml.gz</loc></sitemap>
 </sitemapindex>"""
+
+
+class DriveSpreadsheetProvisionerTests(TestCase):
+    @override_settings(
+        GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE="C:/secure/sheets-key.json"
+    )
+    def test_drive_session_uses_sheets_key_and_drive_scope(self):
+        authorized_session = Mock()
+        with patch(
+            "apps.connectors.sheets.provisioner.get_google_session",
+            return_value=authorized_session,
+        ) as session_factory:
+            result = DriveSpreadsheetProvisioner()._session()
+
+        self.assertIs(result, authorized_session)
+        session_factory.assert_called_once_with(
+            [DRIVE_SCOPE],
+            credential_setting_name="GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE",
+        )
+
+    @override_settings(GOOGLE_API_TIMEOUT_SECONDS=45)
+    def test_creates_shared_drive_sheet_then_shares_admin_as_editor(self):
+        create_response = Mock(status_code=200)
+        create_response.json.return_value = {"id": "new-sheet-id"}
+        permission_response = Mock(status_code=200)
+        permission_response.json.return_value = {"id": "permission-id"}
+        session = Mock()
+        session.request.side_effect = [create_response, permission_response]
+        provisioner = DriveSpreadsheetProvisioner(
+            session=session,
+            parent_folder_id="shared-drive-folder",
+            admin_email="admin@example.com",
+        )
+
+        result = provisioner.provision("Acme")
+
+        self.assertEqual(result, "new-sheet-id")
+        create_call, permission_call = session.request.call_args_list
+        self.assertEqual(
+            create_call.args[:2],
+            ("POST", f"{DRIVE_FILES_URL}?supportsAllDrives=true&fields=id"),
+        )
+        self.assertEqual(
+            create_call.kwargs,
+            {
+                "json": {
+                    "name": "Acme - SEO Opportunities",
+                    "mimeType": SPREADSHEET_MIME_TYPE,
+                    "parents": ["shared-drive-folder"],
+                },
+                "timeout": 45,
+            },
+        )
+        self.assertEqual(permission_call.args[0], "POST")
+        self.assertIn("new-sheet-id/permissions", permission_call.args[1])
+        self.assertEqual(
+            permission_call.kwargs["json"],
+            {
+                "type": "user",
+                "role": "writer",
+                "emailAddress": "admin@example.com",
+            },
+        )
+
+    def test_share_failure_attempts_cleanup_and_preserves_original_error(self):
+        create_response = Mock(status_code=200)
+        create_response.json.return_value = {"id": "orphan-sheet-id"}
+        permission_response = Mock(status_code=403)
+        permission_error = requests.HTTPError("private response")
+        permission_error.response = permission_response
+        permission_response.raise_for_status.side_effect = permission_error
+        cleanup_response = Mock(status_code=204)
+        session = Mock()
+        session.request.side_effect = [
+            create_response,
+            permission_response,
+            cleanup_response,
+        ]
+        provisioner = DriveSpreadsheetProvisioner(
+            session=session,
+            parent_folder_id="shared-drive-folder",
+            admin_email="admin@example.com",
+        )
+
+        with self.assertRaisesMessage(
+            DriveProvisioningError,
+            "Google Drive spreadsheet sharing returned HTTP 403",
+        ):
+            provisioner.provision("Acme")
+
+        cleanup_call = session.request.call_args_list[2]
+        self.assertEqual(cleanup_call.args[0], "DELETE")
+        self.assertIn("orphan-sheet-id", cleanup_call.args[1])
 
 
 class FakeResponse:
@@ -153,7 +253,7 @@ class GoogleConnectorTests(TestCase):
             start_date=date(2026, 7, 1), end_date=date(2026, 7, 28)
         )
 
-        self.assertEqual(len(rows), 2)
+        self.assertEqual(len(rows), 20)
         self.assertEqual(rows[0].query, "running shoes")
         self.assertEqual(rows[0].observed_on, date(2026, 7, 15))
         raw = RawFetch.objects.get(run=self.run, source="gsc")
@@ -200,13 +300,14 @@ class GoogleConnectorTests(TestCase):
     def test_ga4_fixture_maps_values_by_response_headers_and_audits(self):
         records = GA4Connector(self.run, self.market).fetch()
 
-        self.assertEqual(records, [{
-            "landingPagePlusQueryString": "/shoes",
+        self.assertEqual(len(records), 10)
+        self.assertEqual(records[0], {
+            "landingPagePlusQueryString": "/collections/running-shoes",
             "sessionDefaultChannelGroup": "Organic Search",
             "sessions": Decimal("1500"),
             "keyEvents": Decimal("45"),
             "purchaseRevenue": Decimal("6750.00"),
-        }])
+        })
         raw = RawFetch.objects.get(run=self.run, source="ga4")
         self.assertEqual(raw.request_params["property"], "properties/123456789")
         self.assertEqual(raw.request_params["metrics"][1]["name"], "keyEvents")

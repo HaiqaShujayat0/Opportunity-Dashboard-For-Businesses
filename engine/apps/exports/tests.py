@@ -1,16 +1,32 @@
 import csv
 import json
 import tempfile
+import zipfile
+from io import BytesIO
 from pathlib import Path
+from unittest.mock import Mock
+from xml.etree import ElementTree
 
+from django.contrib import admin
 from django.core.management import call_command
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 
 from apps.clients.models import Client, Market
 from apps.exports.builder import EXPORT_COLUMNS, build_opportunity_rows
 from apps.opportunities.models import Opportunity
 from apps.runs.models import Run
-from apps.runs.stages.stage_9_export import OPPORTUNITY_COLUMNS, run_stage_export
+from apps.runs.admin import (
+    RunAdmin,
+    download_opportunities_csv,
+    download_run_xlsx,
+)
+from apps.runs.exporters import TAB_NAMES, generate_csv, generate_excel
+from apps.runs.stages.stage_0_plan import run_stage_plan
+from apps.runs.stages.stage_9_export import (
+    OPPORTUNITY_COLUMNS,
+    _spreadsheet_id,
+    run_stage_export,
+)
 from apps.topics.models import Topic
 
 
@@ -52,6 +68,26 @@ class OpportunityExportTests(TestCase):
             priority_score=82.4,
             why_flagged=["competitor_gap", "keyword_research"],
         )
+        ignored_topic = Topic.objects.create(
+            client=client,
+            market=market,
+            topic_uid="ignored-export-topic",
+            label="Already Winning",
+            primary_keyword="already winning",
+            primary_keyword_volume=500,
+            total_search_volume=500,
+            intent="commercial",
+            first_seen_run=self.run,
+            last_seen_run=self.run,
+        )
+        Opportunity.objects.create(
+            run=self.run,
+            topic=ignored_topic,
+            market=market,
+            action="ignore",
+            priority_score=0,
+            decision_trace={"rule": "already ranks top three"},
+        )
 
     def test_builder_returns_requested_flat_columns(self):
         rows = build_opportunity_rows(self.run)
@@ -59,10 +95,38 @@ class OpportunityExportTests(TestCase):
         self.assertEqual(list(rows[0]), EXPORT_COLUMNS)
         self.assertEqual(rows[0]["Topic"], "Running Shoes")
         self.assertEqual(rows[0]["Action"], "New Content")
-        self.assertEqual(rows[0]["Suggested URL"], "/running-shoes")
+        self.assertEqual(rows[0]["Suggested Slug"], "/running-shoes")
         self.assertEqual(
             rows[0]["Why Flagged"], "competitor_gap, keyword_research"
         )
+
+    def test_option_b_csv_contains_only_main_opportunities_table(self):
+        rows = list(
+            csv.DictReader(
+                generate_csv(self.run).decode("utf-8-sig").splitlines()
+            )
+        )
+
+        self.assertEqual(list(rows[0]), OPPORTUNITY_COLUMNS)
+        self.assertEqual([row["Topic"] for row in rows], ["Running Shoes"])
+        self.assertEqual(rows[0]["topic_uid"], "export-topic")
+
+    def test_xlsx_contains_the_six_canonical_tabs(self):
+        content = generate_excel(self.run)
+
+        self.assertTrue(content.startswith(b"PK"))
+        with zipfile.ZipFile(BytesIO(content)) as workbook_zip:
+            workbook_xml = ElementTree.fromstring(
+                workbook_zip.read("xl/workbook.xml")
+            )
+        namespace = {
+            "main": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
+        }
+        names = [
+            sheet.attrib["name"]
+            for sheet in workbook_xml.findall("main:sheets/main:sheet", namespace)
+        ]
+        self.assertEqual(names, TAB_NAMES)
 
     def test_export_run_writes_csv(self):
         with tempfile.TemporaryDirectory() as temp_directory:
@@ -79,6 +143,55 @@ class OpportunityExportTests(TestCase):
         self.assertEqual(rows[0]["Primary Keyword"], "running shoes")
         self.assertEqual(rows[0]["Priority Score"], "82.4")
         self.assertEqual(list(rows[0]), EXPORT_COLUMNS)
+
+    def test_export_run_writes_xlsx(self):
+        with tempfile.TemporaryDirectory() as temp_directory:
+            output = Path(temp_directory) / "run.xlsx"
+            call_command(
+                "export_run",
+                run_id=self.run.pk,
+                format="xlsx",
+                output=str(output),
+            )
+
+            self.assertTrue(output.read_bytes().startswith(b"PK"))
+
+    def test_admin_actions_return_download_responses_for_one_run(self):
+        model_admin = RunAdmin(Run, admin.site)
+        request = RequestFactory().post("/admin/runs/run/")
+        queryset = Run.objects.filter(pk=self.run.pk)
+
+        csv_response = download_opportunities_csv(
+            model_admin, request, queryset
+        )
+        xlsx_response = download_run_xlsx(model_admin, request, queryset)
+
+        self.assertEqual(csv_response.status_code, 200)
+        self.assertTrue(csv_response.content.startswith(b"\xef\xbb\xbf"))
+        self.assertIn(
+            f"run_{self.run.pk}_opportunities.csv",
+            csv_response["Content-Disposition"],
+        )
+        self.assertEqual(xlsx_response.status_code, 200)
+        self.assertTrue(xlsx_response.content.startswith(b"PK"))
+        self.assertIn(
+            f"run_{self.run.pk}_export.xlsx",
+            xlsx_response["Content-Disposition"],
+        )
+
+    def test_admin_download_requires_exactly_one_run(self):
+        second_run = Run.objects.create(client=self.run.client)
+        model_admin = Mock()
+        request = RequestFactory().post("/admin/runs/run/")
+
+        response = download_opportunities_csv(
+            model_admin,
+            request,
+            Run.objects.filter(pk__in=[self.run.pk, second_run.pk]),
+        )
+
+        self.assertIsNone(response)
+        model_admin.message_user.assert_called_once()
 
 
 class GoogleSheetsExportTests(TestCase):
@@ -181,6 +294,94 @@ class GoogleSheetsExportTests(TestCase):
         self.assertEqual(len(tabs["Cannibalisation"]) - 1, 2)
         self.assertEqual(tabs["Run log"][1][2], "Sheets Client")
         self.assertGreater(len(tabs["Reference"]), 1)
+
+    @override_settings(
+        USE_DUMMY_SHEETS=False,
+        GOOGLE_SHEETS_SPREADSHEET_ID="deployment-fallback",
+    )
+    def test_client_sheet_is_snapshotted_and_run_url_can_override_it(self):
+        self.client_record.google_sheets_spreadsheet_id = "client-sheet-id"
+        self.client_record.save(update_fields=["google_sheets_spreadsheet_id"])
+        self.run.seed_keywords = "running shoes"
+        self.run.markets = ["UK"]
+        self.run.save(update_fields=["seed_keywords", "markets"])
+        run_stage_plan(self.run)
+
+        self.assertEqual(
+            self.run.settings_snapshot["google_sheets_spreadsheet_id"],
+            "client-sheet-id",
+        )
+        self.assertEqual(_spreadsheet_id(self.run), "client-sheet-id")
+
+        self.run.sheet_url = (
+            "https://docs.google.com/spreadsheets/d/run-specific-sheet-id/edit"
+        )
+        self.run.save(update_fields=["sheet_url"])
+        self.assertEqual(_spreadsheet_id(self.run), "run-specific-sheet-id")
+        self.assertEqual(
+            _spreadsheet_id(self.run, explicit_id="command-line-sheet-id"),
+            "command-line-sheet-id",
+        )
+
+    @override_settings(USE_DUMMY_SHEETS=False)
+    def test_blank_client_sheet_is_provisioned_saved_and_reused(self):
+        provisioner = Mock()
+        provisioner.provision.return_value = "auto-created-sheet-id"
+
+        result = _spreadsheet_id(self.run, provisioner=provisioner)
+
+        self.client_record.refresh_from_db()
+        self.run.refresh_from_db()
+        self.assertEqual(result, "auto-created-sheet-id")
+        self.assertEqual(
+            self.client_record.google_sheets_spreadsheet_id,
+            "auto-created-sheet-id",
+        )
+        self.assertEqual(
+            self.run.settings_snapshot["google_sheets_spreadsheet_id"],
+            "auto-created-sheet-id",
+        )
+        provisioner.provision.assert_called_once_with("Sheets Client")
+
+        self.assertEqual(
+            _spreadsheet_id(self.run, provisioner=provisioner),
+            "auto-created-sheet-id",
+        )
+        provisioner.provision.assert_called_once()
+
+    @override_settings(USE_DUMMY_SHEETS=False)
+    def test_new_clients_receive_independent_spreadsheets(self):
+        second_client = Client.objects.create(
+            name="Second Client",
+            slug="second-client",
+            primary_domain="second.example.com",
+        )
+        second_run = Run.objects.create(client=second_client)
+        provisioner = Mock()
+        provisioner.provision.side_effect = ["first-sheet", "second-sheet"]
+
+        first = _spreadsheet_id(self.run, provisioner=provisioner)
+        second = _spreadsheet_id(second_run, provisioner=provisioner)
+
+        self.assertEqual((first, second), ("first-sheet", "second-sheet"))
+        saved = dict(
+            Client.objects.filter(
+                pk__in=[self.client_record.pk, second_client.pk]
+            ).values_list("name", "google_sheets_spreadsheet_id")
+        )
+        self.assertEqual(saved["Sheets Client"], "first-sheet")
+        self.assertEqual(saved["Second Client"], "second-sheet")
+
+    @override_settings(USE_DUMMY_SHEETS=False)
+    def test_provisioning_failure_leaves_client_unconfigured(self):
+        provisioner = Mock()
+        provisioner.provision.side_effect = RuntimeError("Drive unavailable")
+
+        with self.assertRaisesMessage(RuntimeError, "Drive unavailable"):
+            _spreadsheet_id(self.run, provisioner=provisioner)
+
+        self.client_record.refresh_from_db()
+        self.assertEqual(self.client_record.google_sheets_spreadsheet_id, "")
 
     def test_merge_updates_engine_columns_and_preserves_human_columns(self):
         opportunity = self._opportunity("uid-current", "optimise", 88)

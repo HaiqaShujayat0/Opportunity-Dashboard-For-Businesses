@@ -15,7 +15,13 @@ class CompetitorInline(admin.TabularInline):
 
 @admin.register(Client)
 class ClientAdmin(admin.ModelAdmin):
-    list_display = ("name", "slug", "primary_domain", "is_active")
+    list_display = (
+        "name",
+        "slug",
+        "primary_domain",
+        "google_sheets_spreadsheet_id",
+        "is_active",
+    )
     search_fields = ("name", "primary_domain")
     prepopulated_fields = {"slug": ("name",)}
     inlines = [MarketInline]

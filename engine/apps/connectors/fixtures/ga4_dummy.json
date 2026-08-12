@@ -11,7 +11,7 @@
   "rows": [
     {
       "dimensionValues": [
-        {"value": "/shoes"},
+        {"value": "/collections/running-shoes"},
         {"value": "Organic Search"}
       ],
       "metricValues": [
@@ -19,7 +19,106 @@
         {"value": "45"},
         {"value": "6750.00"}
       ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/leggings"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "4200"},
+        {"value": "168"},
+        {"value": "29400.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/sports-bras"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "1800"},
+        {"value": "54"},
+        {"value": "5940.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/mens-shorts"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "2100"},
+        {"value": "63"},
+        {"value": "4410.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/t-shirts"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "1350"},
+        {"value": "27"},
+        {"value": "2025.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/hoodies"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "980"},
+        {"value": "29"},
+        {"value": "3480.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/collections/accessories"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "1650"},
+        {"value": "82"},
+        {"value": "4125.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/blog/best-gym-wear-brands"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "890"},
+        {"value": "12"},
+        {"value": "0.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/blog/what-to-wear-to-gym"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "720"},
+        {"value": "8"},
+        {"value": "0.00"}
+      ]
+    },
+    {
+      "dimensionValues": [
+        {"value": "/blog/compression-leggings-guide"},
+        {"value": "Organic Search"}
+      ],
+      "metricValues": [
+        {"value": "45"},
+        {"value": "0"},
+        {"value": "0.00"}
+      ]
     }
   ],
-  "rowCount": 1
+  "rowCount": 10
 }

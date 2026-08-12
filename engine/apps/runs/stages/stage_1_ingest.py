@@ -136,21 +136,26 @@ def run_stage_ingest(run: Run) -> dict:
     run.total_cost_usd = cost_total
     run.save(update_fields=["total_cost_usd"])
 
-    # --- Record stage completion ---
-    stage_status = "partial" if any_failure else "complete"
-    if any_failure and not market_results:
-        raise RuntimeError("No configured markets could be loaded for ingestion.")
+    # --- Record stage completion/failure before propagating fatal errors ---
     completed_markets = [
         code for code, result in market_results.items()
         if result["status"] == "complete"
     ]
     if any_failure and not completed_markets:
-        raise RuntimeError("DataForSEO ingestion failed for every configured market.")
+        stage_status = "failed"
+    elif any_failure:
+        stage_status = "partial"
+    else:
+        stage_status = "complete"
+
     stage_errors = "; ".join(
         f"{code}: {result['error']}"
         for code, result in market_results.items()
         if result["status"] == "failed"
     )
+    if any_failure and not market_results:
+        stage_errors = "No configured markets could be loaded for ingestion."
+
     RunStage.objects.update_or_create(
         run=run,
         name="ingest",
@@ -163,6 +168,11 @@ def run_stage_ingest(run: Run) -> dict:
             "error": stage_errors,
         },
     )
+
+    if any_failure and not market_results:
+        raise RuntimeError("No configured markets could be loaded for ingestion.")
+    if stage_status == "failed":
+        raise RuntimeError("DataForSEO ingestion failed for every configured market.")
 
     summary = {
         "total_raw_fetches": total_raw_fetches,

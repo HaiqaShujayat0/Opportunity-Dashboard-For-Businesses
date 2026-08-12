@@ -26,7 +26,11 @@ def _normalise_stage(stages):
 
 @app.task
 def run_pipeline_async(run_id, stages=None):
-    """Execute the unchanged management-command pipeline in a Celery worker."""
+    """Execute the unchanged management-command pipeline in a Celery worker.
+
+    Stage 9 owns per-client spreadsheet provisioning so this task, synchronous
+    commands, and direct Sheets exports all use the same safe behavior.
+    """
     try:
         run = Run.objects.select_related("client").get(pk=run_id)
     except Run.DoesNotExist as exc:
@@ -42,6 +46,7 @@ def run_pipeline_async(run_id, stages=None):
             verbosity=0,
         )
         run.refresh_from_db()
+        run.client.refresh_from_db(fields=["google_sheets_spreadsheet_id"])
 
         # The orchestrator normally sets complete/partial. This fallback keeps
         # the task contract correct if a future command path returns cleanly
@@ -56,6 +61,9 @@ def run_pipeline_async(run_id, stages=None):
             "run_id": run.pk,
             "status": run.status,
             "stage": stage,
+            "spreadsheet_id": (
+                run.client.google_sheets_spreadsheet_id or None
+            ),
         }
     except Exception as exc:
         run.status = "failed"

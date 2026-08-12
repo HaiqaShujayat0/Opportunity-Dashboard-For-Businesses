@@ -116,6 +116,9 @@ def run_stage_plan(run: Run) -> dict:
         "markets": market_data,
         "engine_settings": settings_dict,
         "scoring_weights": weights_dict,
+        "google_sheets_spreadsheet_id": (
+            run.client.google_sheets_spreadsheet_id or ""
+        ),
         "snapshot_taken_at": timezone.now().isoformat(),
     }
 

@@ -1,18 +1,144 @@
 {
   "rows": [
     {
-      "keys": ["running shoes", "https://example.com/shoes", "gbr", "2026-07-15"],
+      "keys": ["running shoes", "https://example.com/collections/running-shoes", "gbr", "2026-07-15"],
       "clicks": 450,
       "impressions": 12000,
       "ctr": 0.0375,
       "position": 8.2
     },
     {
-      "keys": ["best running shoes", "https://example.com/shoes", "gbr", "2026-07-15"],
+      "keys": ["best running shoes", "https://example.com/collections/running-shoes", "gbr", "2026-07-15"],
       "clicks": 80,
       "impressions": 4500,
-      "ctr": 0.0177777778,
+      "ctr": 0.0178,
       "position": 14.3
+    },
+    {
+      "keys": ["gym leggings", "https://example.com/collections/leggings", "gbr", "2026-07-15"],
+      "clicks": 1200,
+      "impressions": 28000,
+      "ctr": 0.0429,
+      "position": 4.1
+    },
+    {
+      "keys": ["womens gym leggings", "https://example.com/collections/leggings", "gbr", "2026-07-15"],
+      "clicks": 870,
+      "impressions": 15000,
+      "ctr": 0.058,
+      "position": 3.6
+    },
+    {
+      "keys": ["high waisted leggings", "https://example.com/collections/leggings", "gbr", "2026-07-15"],
+      "clicks": 340,
+      "impressions": 9200,
+      "ctr": 0.037,
+      "position": 7.8
+    },
+    {
+      "keys": ["sports bra", "https://example.com/collections/sports-bras", "gbr", "2026-07-15"],
+      "clicks": 620,
+      "impressions": 22000,
+      "ctr": 0.0282,
+      "position": 6.4
+    },
+    {
+      "keys": ["high impact sports bra", "https://example.com/collections/sports-bras", "gbr", "2026-07-15"],
+      "clicks": 190,
+      "impressions": 7800,
+      "ctr": 0.0244,
+      "position": 11.2
+    },
+    {
+      "keys": ["mens gym shorts", "https://example.com/collections/mens-shorts", "gbr", "2026-07-15"],
+      "clicks": 530,
+      "impressions": 18000,
+      "ctr": 0.0294,
+      "position": 5.9
+    },
+    {
+      "keys": ["workout shorts men", "https://example.com/collections/mens-shorts", "gbr", "2026-07-15"],
+      "clicks": 210,
+      "impressions": 8500,
+      "ctr": 0.0247,
+      "position": 9.7
+    },
+    {
+      "keys": ["gym t shirt", "https://example.com/collections/t-shirts", "gbr", "2026-07-15"],
+      "clicks": 380,
+      "impressions": 14000,
+      "ctr": 0.0271,
+      "position": 6.8
+    },
+    {
+      "keys": ["mens workout t shirt", "https://example.com/collections/t-shirts", "gbr", "2026-07-15"],
+      "clicks": 145,
+      "impressions": 6200,
+      "ctr": 0.0234,
+      "position": 12.5
+    },
+    {
+      "keys": ["gym hoodies", "https://example.com/collections/hoodies", "gbr", "2026-07-15"],
+      "clicks": 290,
+      "impressions": 11000,
+      "ctr": 0.0264,
+      "position": 7.3
+    },
+    {
+      "keys": ["zip up hoodie gym", "https://example.com/collections/hoodies", "gbr", "2026-07-15"],
+      "clicks": 95,
+      "impressions": 5400,
+      "ctr": 0.0176,
+      "position": 16.1
+    },
+    {
+      "keys": ["protein shaker bottle", "https://example.com/collections/accessories", "gbr", "2026-07-15"],
+      "clicks": 410,
+      "impressions": 9800,
+      "ctr": 0.0418,
+      "position": 3.2
+    },
+    {
+      "keys": ["gym bag", "https://example.com/collections/accessories", "gbr", "2026-07-15"],
+      "clicks": 175,
+      "impressions": 13000,
+      "ctr": 0.0135,
+      "position": 18.4
+    },
+    {
+      "keys": ["best gym wear brands", "https://example.com/blog/best-gym-wear-brands", "gbr", "2026-07-15"],
+      "clicks": 320,
+      "impressions": 8900,
+      "ctr": 0.036,
+      "position": 5.1
+    },
+    {
+      "keys": ["what to wear to the gym", "https://example.com/blog/what-to-wear-to-gym", "gbr", "2026-07-15"],
+      "clicks": 260,
+      "impressions": 11500,
+      "ctr": 0.0226,
+      "position": 9.3
+    },
+    {
+      "keys": ["gym outfit ideas", "https://example.com/blog/what-to-wear-to-gym", "gbr", "2026-07-15"],
+      "clicks": 55,
+      "impressions": 4200,
+      "ctr": 0.0131,
+      "position": 21.6
+    },
+    {
+      "keys": ["compression leggings benefits", "https://example.com/blog/compression-leggings-guide", "gbr", "2026-07-15"],
+      "clicks": 12,
+      "impressions": 2800,
+      "ctr": 0.0043,
+      "position": 34.7
+    },
+    {
+      "keys": ["squat proof leggings", "https://example.com/collections/leggings", "gbr", "2026-07-15"],
+      "clicks": 480,
+      "impressions": 6700,
+      "ctr": 0.0716,
+      "position": 2.4
     }
   ],
   "responseAggregationType": "byPage"

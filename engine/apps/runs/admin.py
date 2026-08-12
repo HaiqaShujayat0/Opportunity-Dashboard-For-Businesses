@@ -1,28 +1,64 @@
-from django.contrib import admin
-import csv
+from django.contrib import admin, messages
 from django.http import HttpResponse
-from .models import Run, RunStage
-from apps.exports.builder import EXPORT_COLUMNS, build_opportunity_rows
+
+from apps.runs.exporters import generate_csv, generate_excel
 from apps.runs.tasks import run_pipeline_async
 
-@admin.action(description="Export Opportunities to CSV")
-def export_to_csv(modeladmin, request, queryset):
-    # Process the first selected run
-    run = queryset.first()
-    if not run:
-        return
-        
-    response = HttpResponse(content_type='text/csv')
-    response['Content-Disposition'] = f'attachment; filename="run_{run.pk}_opportunities.csv"'
-    
-    writer = csv.DictWriter(response, fieldnames=EXPORT_COLUMNS)
-    writer.writeheader()
-    
-    rows = build_opportunity_rows(run)
-    for row in rows:
-        writer.writerow(row)
-        
-    return response
+from .models import Run, RunStage
+
+
+def _single_selected_run(modeladmin, request, queryset):
+    if queryset.count() != 1:
+        modeladmin.message_user(
+            request,
+            "Select exactly one Run to download an export.",
+            level=messages.ERROR,
+        )
+        return None
+    return queryset.select_related("client").first()
+
+
+@admin.action(description="Download Opportunities as CSV")
+def download_opportunities_csv(modeladmin, request, queryset):
+    """Download Option B: only the main actionable Opportunities table."""
+    run = _single_selected_run(modeladmin, request, queryset)
+    if run is None:
+        return None
+    try:
+        content = generate_csv(run)
+    except RuntimeError as exc:
+        modeladmin.message_user(request, str(exc), level=messages.ERROR)
+        return None
+    return HttpResponse(
+        content,
+        content_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": (
+                f'attachment; filename="run_{run.pk}_opportunities.csv"'
+            )
+        },
+    )
+
+
+@admin.action(description="Download current Run as XLSX (6 tabs)")
+def download_run_xlsx(modeladmin, request, queryset):
+    run = _single_selected_run(modeladmin, request, queryset)
+    if run is None:
+        return None
+    try:
+        content = generate_excel(run)
+    except RuntimeError as exc:
+        modeladmin.message_user(request, str(exc), level=messages.ERROR)
+        return None
+    return HttpResponse(
+        content,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+        headers={
+            "Content-Disposition": f'attachment; filename="run_{run.pk}_export.xlsx"'
+        },
+    )
 
 
 @admin.action(description="Run Pipeline in Background")
@@ -42,7 +78,11 @@ class RunAdmin(admin.ModelAdmin):
     list_filter = ("status", "run_type", "client")
     search_fields = ("client__name",)
     readonly_fields = ("created_at", "total_cost_usd", "started_at", "finished_at")
-    actions = [export_to_csv, run_pipeline_in_background]
+    actions = [
+        download_opportunities_csv,
+        download_run_xlsx,
+        run_pipeline_in_background,
+    ]
 @admin.register(RunStage)
 class RunStageAdmin(admin.ModelAdmin):
     list_display = ("run", "name", "status", "records_in", "records_out")

@@ -111,7 +111,11 @@ class RelevantPageItem(BaseModel):
 # ---------------------------------------------------------------------------
 class KeywordDifficultyItem(BaseModel):
     keyword: str
-    keyword_difficulty: int              # 0-100
+    # DataForSEO returns null when it cannot calculate a score for a keyword.
+    # Missing difficulty is already supported by KeywordObservation and the
+    # downstream scoring fallback, so preserve it instead of rejecting the
+    # entire paid batch response.
+    keyword_difficulty: Optional[int] = None  # 0-100 when available
 
 
 # ---------------------------------------------------------------------------

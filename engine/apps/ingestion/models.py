@@ -54,6 +54,7 @@ class RawFetch(models.Model):
             models.Index(fields=["market", "source", "fetched_at"]),
             models.Index(fields=["request_hash", "fetched_at"]),
         ]
+        verbose_name_plural = "Raw fetches"
 
     def __str__(self):
         return f"RawFetch [{self.source}] {self.endpoint} @ {self.fetched_at:%Y-%m-%d %H:%M}"

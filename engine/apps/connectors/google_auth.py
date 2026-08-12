@@ -19,13 +19,15 @@ class GoogleTransportError(RuntimeError):
     """A sanitized Google credential or HTTP transport failure."""
 
 
-def get_google_session(scopes):
+def get_google_session(
+    scopes,
+    credential_setting_name="GOOGLE_API_SERVICE_ACCOUNT_FILE",
+):
     """Build an authorized service-account session with least-privilege scopes."""
-    credential_setting = getattr(settings, "GOOGLE_API_SERVICE_ACCOUNT_FILE", "")
+    credential_setting = getattr(settings, credential_setting_name, "")
     if not credential_setting:
         raise GoogleTransportError(
-            "GOOGLE_API_SERVICE_ACCOUNT_FILE is required when "
-            "GOOGLE_USE_DUMMY_DATA=False."
+            f"{credential_setting_name} is required for this Google API operation."
         )
     credential_path = Path(credential_setting).expanduser()
     if not credential_path.is_file():

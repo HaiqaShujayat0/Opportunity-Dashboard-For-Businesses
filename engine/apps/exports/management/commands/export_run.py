@@ -7,6 +7,7 @@ from django.core.management.base import BaseCommand, CommandError
 
 from apps.exports.builder import EXPORT_COLUMNS, build_opportunity_rows
 from apps.runs.models import Run
+from apps.runs.exporters import generate_excel
 from apps.runs.stages.stage_9_export import run_stage_export
 
 
@@ -17,9 +18,9 @@ class Command(BaseCommand):
         parser.add_argument("--run-id", type=int, required=True)
         parser.add_argument(
             "--format",
-            choices=["csv", "sheets"],
+            choices=["csv", "xlsx", "sheets"],
             default="csv",
-            help="Export format: csv or sheets.",
+            help="Export format: csv, xlsx, or sheets.",
         )
         parser.add_argument(
             "--output",
@@ -49,6 +50,22 @@ class Command(BaseCommand):
                     f"{summary['spreadsheet_id']} "
                     f"({summary['opportunities']} actionable rows, "
                     f"{summary['archived']} archived)."
+                )
+            )
+            return
+
+        if options["format"] == "xlsx":
+            output_path = Path(
+                options["output"] or f"run_{run_id}_export.xlsx"
+            ).expanduser().resolve()
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                output_path.write_bytes(generate_excel(run))
+            except RuntimeError as exc:
+                raise CommandError(str(exc)) from exc
+            self.stdout.write(
+                self.style.SUCCESS(
+                    f"Exported Run #{run_id} to XLSX at {output_path}."
                 )
             )
             return

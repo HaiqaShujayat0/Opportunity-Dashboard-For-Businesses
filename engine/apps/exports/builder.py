@@ -1,58 +1,17 @@
-"""Build flat, presentation-ready rows from pipeline opportunities."""
+"""Backward-compatible dictionary view of the canonical Opportunities tab."""
 
-from apps.opportunities.models import Opportunity
-
-
-EXPORT_COLUMNS = [
-    "Topic",
-    "Primary Keyword",
-    "Search Volume",
-    "Difficulty",
-    "Intent",
-    "Action",
-    "Page Type",
-    "Suggested URL",
-    "Priority Score",
-    "Why Flagged",
-]
+from apps.runs.exporters import OPPORTUNITY_COLUMNS, build_export_tabs
 
 
-def _suggested_url(opportunity):
-    """Prefer a known target page; otherwise return the proposed new slug."""
-    if opportunity.target_urls:
-        return opportunity.target_urls[0]
-    return opportunity.suggested_slug or ""
+EXPORT_COLUMNS = OPPORTUNITY_COLUMNS
 
 
 def build_opportunity_rows(run):
     """
-    Return all opportunities for ``run`` as a flat list of dictionaries.
+    Return the main Opportunities table (new content + optimise only).
 
-    Rows are ordered by priority score (highest first), then topic and primary
-    key for deterministic CSV and future Google Sheets output.
+    This compatibility API now uses the same 19 engine-owned columns as Google
+    Sheets, CSV downloads, and XLSX downloads.
     """
-    opportunities = (
-        Opportunity.objects.filter(run=run)
-        .select_related("topic")
-        .order_by("-priority_score", "topic__label", "pk")
-    )
-
-    return [
-        {
-            "Topic": opportunity.topic.label,
-            "Primary Keyword": opportunity.topic.primary_keyword,
-            "Search Volume": opportunity.topic.total_search_volume,
-            "Difficulty": opportunity.difficulty or "Unknown",
-            "Intent": opportunity.topic.intent or "Unknown",
-            "Action": opportunity.get_action_display(),
-            "Page Type": opportunity.page_type or "",
-            "Suggested URL": _suggested_url(opportunity),
-            "Priority Score": (
-                opportunity.priority_score
-                if opportunity.priority_score is not None
-                else ""
-            ),
-            "Why Flagged": ", ".join(opportunity.why_flagged or []),
-        }
-        for opportunity in opportunities
-    ]
+    rows, _ = build_export_tabs(run)
+    return [dict(zip(EXPORT_COLUMNS, row)) for row in rows["Opportunities"][1:]]

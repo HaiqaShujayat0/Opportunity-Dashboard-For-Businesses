@@ -3,6 +3,7 @@ import tempfile
 from datetime import date
 from decimal import Decimal
 from pathlib import Path
+from unittest.mock import patch
 
 from django.db import IntegrityError
 from django.test import TestCase
@@ -15,6 +16,7 @@ from apps.ingestion.models import KeywordObservation, RawFetch
 from apps.pages.models import ExistingPage, PositionSnapshot
 from apps.opportunities.models import Opportunity
 from apps.runs.models import Run, RunStage
+from apps.runs.stages.stage_1_ingest import run_stage_ingest
 from apps.runs.stages.stage_2_normalise import PayloadStructureError, run_stage_normalise
 from apps.runs.stages.stage_2b_analytics import run_stage_analytics
 from apps.runs.stages.stage_4_cluster import run_stage_cluster
@@ -28,6 +30,71 @@ from apps.topics.models import TopicKeyword
 
 def response(items):
     return {"tasks": [{"result": [{"items": items}]}]}
+
+
+class DataForSEOIngestionRegressionTests(TestCase):
+    def setUp(self):
+        client = Client.objects.create(
+            name="DataForSEO Client",
+            slug="dataforseo-client",
+            primary_domain="example.com",
+        )
+        self.market = Market.objects.create(
+            client=client,
+            code="UK",
+            country_iso="GB",
+            language_code="en",
+            dataforseo_location_code=2826,
+            gsc_property="sc-domain:example.com",
+            sitemap_url="https://example.com/sitemap.xml",
+        )
+        self.run = Run.objects.create(
+            client=client,
+            seed_keywords="home workout equipment reviews",
+            settings_snapshot={
+                "seed_keywords": ["home workout equipment reviews"],
+                "markets": [{
+                    "market_id": self.market.pk,
+                    "market_code": self.market.code,
+                    "competitors": [],
+                }],
+            },
+        )
+
+    @patch("apps.connectors.dataforseo.client.DataForSEOClient._post")
+    def test_ingest_accepts_null_bulk_keyword_difficulty(self, api_post):
+        api_post.side_effect = [
+            response([{"keyword": "home workout equipment reviews"}]),
+            response([{
+                "keyword": "home workout equipment reviews",
+                "keyword_difficulty": None,
+            }]),
+        ]
+
+        summary = run_stage_ingest(self.run)
+
+        self.assertEqual(summary["stage_status"], "complete")
+        self.assertEqual(summary["total_raw_fetches"], 2)
+        self.assertEqual(RawFetch.objects.filter(run=self.run).count(), 2)
+        stage = RunStage.objects.get(run=self.run, name="ingest")
+        self.assertEqual(stage.status, "complete")
+        self.assertEqual(stage.error, "")
+
+    @patch(
+        "apps.runs.stages.stage_1_ingest.DataForSEOConnector.get_keyword_ideas",
+        side_effect=ValueError("provider response could not be parsed"),
+    )
+    def test_all_market_failure_records_failed_ingest_stage(self, _keyword_ideas):
+        with self.assertRaisesMessage(
+            RuntimeError,
+            "DataForSEO ingestion failed for every configured market.",
+        ):
+            run_stage_ingest(self.run)
+
+        stage = RunStage.objects.get(run=self.run, name="ingest")
+        self.assertEqual(stage.status, "failed")
+        self.assertIn("provider response could not be parsed", stage.error)
+        self.assertIsNotNone(stage.finished_at)
 
 
 class CeleryPipelineTaskTests(TestCase):
@@ -229,12 +296,12 @@ class AnalyticsNormalisationTests(TestCase):
 
         summary = run_stage_analytics(self.run)
 
-        self.assertEqual(summary["gsc"]["snapshots_created"], 2)
-        self.assertEqual(PositionSnapshot.objects.count(), 2)
+        self.assertEqual(summary["gsc"]["snapshots_created"], 20)
+        self.assertEqual(PositionSnapshot.objects.count(), 20)
         self.assertEqual(
-            KeywordObservation.objects.filter(source="gsc", signal="quick_win").count(), 2
+            KeywordObservation.objects.filter(source="gsc", signal="quick_win").count(), 10
         )
-        page = ExistingPage.objects.get(path="/shoes")
+        page = ExistingPage.objects.get(path="/collections/running-shoes")
         self.assertFalse(page.in_sitemap)
         self.assertEqual(page.total_clicks_28d, 530)
         self.assertEqual(page.total_impressions_28d, 16500)
@@ -250,12 +317,12 @@ class AnalyticsNormalisationTests(TestCase):
         first = run_stage_analytics(self.run)
         second = run_stage_analytics(self.run)
 
-        self.assertEqual(first["gsc"]["snapshots_created"], 2)
+        self.assertEqual(first["gsc"]["snapshots_created"], 20)
         self.assertEqual(second["gsc"]["snapshots_created"], 0)
-        self.assertEqual(second["gsc"]["snapshots_updated"], 2)
-        self.assertEqual(PositionSnapshot.objects.count(), 2)
-        self.assertEqual(KeywordObservation.objects.filter(source="gsc").count(), 2)
-        self.assertEqual(ExistingPage.objects.count(), 1)
+        self.assertEqual(second["gsc"]["snapshots_updated"], 20)
+        self.assertEqual(PositionSnapshot.objects.count(), 20)
+        self.assertEqual(KeywordObservation.objects.filter(source="gsc").count(), 20)
+        self.assertEqual(ExistingPage.objects.count(), 10)
 
     def test_same_keyword_can_preserve_rankings_for_two_pages(self):
         rows = [
@@ -290,7 +357,7 @@ class AnalyticsNormalisationTests(TestCase):
         PositionSnapshot.objects.create(
             market=self.market, observed_on=date(2026, 6, 15),
             keyword="running shoes", keyword_normalised="running shoes",
-            page_url="https://example.com/shoes", country="gbr",
+            page_url="https://example.com/collections/running-shoes", country="gbr",
             clicks=100, impressions=1000, ctr=0.1, position=3.0,
         )
         GSCConnector(self.run, self.market).fetch(
@@ -318,8 +385,11 @@ class AnalyticsNormalisationTests(TestCase):
 
         self.assertEqual(RawFetch.objects.filter(run=self.run, source="gsc").count(), 1)
         self.assertEqual(RawFetch.objects.filter(run=self.run, source="ga4").count(), 1)
-        self.assertEqual(PositionSnapshot.objects.count(), 2)
-        self.assertEqual(ExistingPage.objects.get(path="/shoes").sessions_28d, 1500)
+        self.assertEqual(PositionSnapshot.objects.count(), 20)
+        self.assertEqual(
+            ExistingPage.objects.get(path="/collections/running-shoes").sessions_28d,
+            1500,
+        )
 
 
 class DecisionEngineTests(TestCase):

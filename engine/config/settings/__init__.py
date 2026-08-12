@@ -45,6 +45,8 @@ GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE = env(
     'GOOGLE_SHEETS_SERVICE_ACCOUNT_FILE', default=''
 )
 GOOGLE_SHEETS_SPREADSHEET_ID = env('GOOGLE_SHEETS_SPREADSHEET_ID', default='')
+GOOGLE_DRIVE_PARENT_FOLDER_ID = env('GOOGLE_DRIVE_PARENT_FOLDER_ID', default='')
+ADMIN_GOOGLE_EMAIL = env('ADMIN_GOOGLE_EMAIL', default='')
 SHEETS_MOCK_FILE = BASE_DIR / 'tests' / 'fixtures' / 'sheets_mock.json'
 
 # GSC/GA4 response fixtures remain the safe default. The live transport uses
@@ -63,6 +65,10 @@ CELERY_BROKER_URL = env(
 CELERY_RESULT_BACKEND = env(
     'CELERY_RESULT_BACKEND', default='redis://localhost:6379/0'
 )
+# Windows + Python 3.14: billiard shared-memory semaphores are not supported.
+# solo pool runs tasks in the worker process directly (no subprocess spawning).
+# This is fine for our single-pipeline-at-a-time workload.
+CELERY_WORKER_POOL = env('CELERY_WORKER_POOL', default='solo')
 
 ALLOWED_HOSTS = []
 
