@@ -12,12 +12,27 @@ What it does:
 This stage never calls any external API. It just organises the config.
 """
 import logging
+from decimal import Decimal
+
 from django.utils import timezone
 
 from apps.clients.models import EngineSettings, ScoringWeights
 from apps.runs.models import Run, RunStage
 
 logger = logging.getLogger(__name__)
+
+
+def _engine_settings_to_dict(instance):
+    """Serialize every configurable field into JSON-safe snapshot values."""
+    if instance is None:
+        return {}
+    values = {}
+    for field in instance._meta.concrete_fields:
+        if field.name in {"id", "client", "market"}:
+            continue
+        value = getattr(instance, field.name)
+        values[field.name] = float(value) if isinstance(value, Decimal) else value
+    return values
 
 
 def run_stage_plan(run: Run) -> dict:
@@ -71,30 +86,27 @@ def run_stage_plan(run: Run) -> dict:
             "competitors": competitors,
         })
 
-    # --- 4. Snapshot EngineSettings ---
-    try:
-        engine_settings = EngineSettings.objects.filter(
-            client=run.client, market=None
+    # --- 4. Snapshot default + per-market EngineSettings ---
+    default_record = EngineSettings.objects.filter(
+        client=run.client, market=None
+    ).first()
+    default_settings = _engine_settings_to_dict(default_record)
+    market_settings = {}
+    has_engine_settings = bool(default_record)
+    for market in active_markets:
+        override = EngineSettings.objects.filter(
+            client=run.client, market=market
         ).first()
-        settings_dict = {}
-        if engine_settings:
-            settings_dict = {
-                "min_search_volume": engine_settings.min_search_volume,
-                "max_keyword_difficulty": engine_settings.max_keyword_difficulty,
-                "max_spend_per_run_usd": float(engine_settings.max_spend_per_run_usd),
-                "max_serp_calls_per_run": engine_settings.max_serp_calls_per_run,
-                "quick_win_min_position": engine_settings.quick_win_min_position,
-                "quick_win_max_position": engine_settings.quick_win_max_position,
-                "decay_baseline_max_position": engine_settings.decay_baseline_max_position,
-                "decay_current_min_position": engine_settings.decay_current_min_position,
-                "decay_min_drop": engine_settings.decay_min_drop,
-                "decay_baseline_days": engine_settings.decay_baseline_days,
-                "decay_comparison_days": engine_settings.decay_comparison_days,
-                "serp_overlap_threshold": engine_settings.serp_overlap_threshold,
-                "semantic_similarity_threshold": engine_settings.semantic_similarity_threshold,
-            }
-    except Exception:
-        settings_dict = {}
+        has_engine_settings = has_engine_settings or bool(override)
+        merged = dict(default_settings)
+        if override:
+            override_settings = _engine_settings_to_dict(override)
+            merged.update({
+                key: value
+                for key, value in override_settings.items()
+                if value is not None and value != ""
+            })
+        market_settings[market.code] = merged
 
     # --- 5. Snapshot ScoringWeights ---
     try:
@@ -114,7 +126,7 @@ def run_stage_plan(run: Run) -> dict:
     settings_snapshot = {
         "seed_keywords": seed_keywords,
         "markets": market_data,
-        "engine_settings": settings_dict,
+        "engine_settings": market_settings,
         "scoring_weights": weights_dict,
         "google_sheets_spreadsheet_id": (
             run.client.google_sheets_spreadsheet_id or ""
@@ -141,7 +153,7 @@ def run_stage_plan(run: Run) -> dict:
     summary = {
         "seed_keywords": seed_keywords,
         "markets": [m["market_code"] for m in market_data],
-        "has_engine_settings": bool(settings_dict),
+        "has_engine_settings": has_engine_settings,
         "has_scoring_weights": bool(weights_dict),
     }
 

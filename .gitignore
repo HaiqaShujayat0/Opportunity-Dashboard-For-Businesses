@@ -16,6 +16,11 @@ venv/
 # Django
 *.sqlite3
 db.sqlite3
+backup*.json
+*service-account*.json
+*service_account*.json
+*google-credentials*.json
+opportunity-engine-*.json
 staticfiles/
 media/
 
@@ -28,3 +33,7 @@ media/
 # OS
 .DS_Store
 Thumbs.db
+
+#documents
+/documents
+

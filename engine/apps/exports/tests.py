@@ -96,6 +96,7 @@ class OpportunityExportTests(TestCase):
         self.assertEqual(rows[0]["Topic"], "Running Shoes")
         self.assertEqual(rows[0]["Action"], "New Content")
         self.assertEqual(rows[0]["Suggested Slug"], "/running-shoes")
+        self.assertIn("Estimated Impact", rows[0])
         self.assertEqual(
             rows[0]["Why Flagged"], "competitor_gap, keyword_research"
         )
@@ -398,8 +399,31 @@ class GoogleSheetsExportTests(TestCase):
         row = self._tabs()["Opportunities"][1]
 
         self.assertEqual(row[0], "Uid Current")
-        self.assertEqual(row[17], 88.0)
-        self.assertEqual(row[19:], ["Amina", "Keep this client note"])
+        self.assertEqual(row[OPPORTUNITY_COLUMNS.index("Priority Score")], 88.0)
+        self.assertEqual(
+            row[len(OPPORTUNITY_COLUMNS):],
+            ["Amina", "Keep this client note"],
+        )
+
+    def test_merge_preserves_human_columns_from_pre_impact_sheet_contract(self):
+        opportunity = self._opportunity("uid-legacy", "optimise", 77)
+        legacy_headers = [
+            header for header in OPPORTUNITY_COLUMNS
+            if header != "Estimated Impact"
+        ]
+        legacy_values = ["Old engine value"] * len(legacy_headers)
+        legacy_values[legacy_headers.index("topic_uid")] = opportunity.topic.topic_uid
+        self._seed_sheet([
+            legacy_headers + ["Owner", "Status"],
+            legacy_values + ["Amina", "In progress"],
+        ])
+
+        run_stage_export(self.run)
+        row = self._tabs()["Opportunities"][1]
+
+        self.assertEqual(
+            row[len(OPPORTUNITY_COLUMNS):], ["Amina", "In progress"]
+        )
 
     def test_missing_rows_are_moved_to_archived(self):
         self._opportunity("uid-current", "new_content", 80)

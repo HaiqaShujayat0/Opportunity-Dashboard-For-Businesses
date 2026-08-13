@@ -5,10 +5,19 @@ from decimal import Decimal
 from django.db import transaction
 from django.utils import timezone
 
+from apps.connectors.dataforseo.connector import (
+    dataforseo_response_is_declared_failure,
+)
 from apps.ingestion.models import KeywordObservation, RawFetch
 from apps.runs.models import Run, RunStage
 
 logger = logging.getLogger(__name__)
+
+KEYWORD_DISCOVERY_ENDPOINTS = (
+    "keyword_ideas",
+    "keyword_suggestions",
+    "related_keywords",
+)
 
 
 class PayloadStructureError(ValueError):
@@ -25,8 +34,12 @@ def _items(payload: dict, endpoint: str) -> list:
         tasks = payload["tasks"]
         task = tasks[0]
         results = task["result"]
+        if not results:
+            return []
         result = results[0]
-        items = result["items"]
+        if result is None:
+            return []
+        items = result.get("items") or []
     except (KeyError, IndexError, TypeError) as exc:
         raise PayloadStructureError(
             f"Malformed DataForSEO payload for {endpoint}: expected "
@@ -44,10 +57,13 @@ def _parse_keyword_ideas(payload: dict, endpoint: str) -> list[dict]:
     for item in _items(payload, endpoint):
         if not isinstance(item, dict):
             raise PayloadStructureError(f"Malformed item in {endpoint}: expected an object")
-        kw_info = item.get("keyword_info") or {}
-        kw_props = item.get("keyword_properties") or {}
+        # related_keywords wraps the same keyword fields in keyword_data;
+        # ideas and suggestions return them at the item level.
+        keyword_data = item.get("keyword_data") or item
+        kw_info = keyword_data.get("keyword_info") or {}
+        kw_props = keyword_data.get("keyword_properties") or {}
         rows.append({
-            "keyword": item.get("keyword", ""),
+            "keyword": keyword_data.get("keyword", ""),
             "signal": "keyword_research",
             "search_volume": kw_info.get("search_volume") or 0,
             "cpc": kw_info.get("cpc") or 0.0,
@@ -64,14 +80,51 @@ def _parse_domain_intersection(payload: dict, endpoint: str, competitor_domain="
         if not isinstance(item, dict):
             raise PayloadStructureError(f"Malformed item in {endpoint}: expected an object")
         kw_data = item.get("keyword_data") or {}
+        kw_info = kw_data.get("keyword_info") or {}
+        kw_props = kw_data.get("keyword_properties") or {}
+        competitor_result = item.get("first_domain_serp_element") or {}
+        if not isinstance(competitor_result, dict):
+            raise PayloadStructureError(
+                f"Malformed item in {endpoint}: "
+                "first_domain_serp_element must be an object"
+            )
+
+        # target1 is the competitor in Stage 1, so its ranking URL is stored in
+        # first_domain_serp_element. Keep legacy top-level fallbacks so older
+        # saved fixtures and receipts remain reprocessable.
+        search_volume = kw_info.get("search_volume")
+        if search_volume is None:
+            search_volume = kw_data.get("search_volume")
+        if search_volume is None:
+            search_volume = item.get("search_volume")
+
+        cpc = kw_info.get("cpc")
+        if cpc is None:
+            cpc = kw_data.get("cpc")
+        if cpc is None:
+            cpc = item.get("cpc")
+
+        competition = kw_info.get("competition")
+        if competition is None:
+            competition = kw_data.get("competition")
+        if competition is None:
+            competition = item.get("competition")
+
+        keyword_difficulty = kw_props.get("keyword_difficulty")
+        if keyword_difficulty is None:
+            keyword_difficulty = kw_data.get("keyword_difficulty")
+        if keyword_difficulty is None:
+            keyword_difficulty = item.get("keyword_difficulty")
+
         rows.append({
             "keyword": kw_data.get("keyword", ""),
             "signal": "competitor_gap",
-            "search_volume": kw_data.get("search_volume") or item.get("search_volume") or 0,
-            "cpc": kw_data.get("cpc") or item.get("cpc") or 0.0,
-            "competition": kw_data.get("competition") if kw_data.get("competition") is not None else item.get("competition"),
-            "keyword_difficulty": kw_data.get("keyword_difficulty") if kw_data.get("keyword_difficulty") is not None else item.get("keyword_difficulty"),
+            "search_volume": search_volume or 0,
+            "cpc": cpc if cpc is not None else 0.0,
+            "competition": competition,
+            "keyword_difficulty": keyword_difficulty,
             "competitor_domain": competitor_domain,
+            "competitor_url": competitor_result.get("url") or "",
         })
     return rows
 
@@ -132,11 +185,21 @@ def run_stage_normalise(run: Run) -> dict:
         name="normalise",
         defaults={"status": "running", "started_at": timezone.now(), "finished_at": None, "error": ""},
     )
-    raw_fetches = list(
+    candidate_fetches = list(
         RawFetch.objects.filter(run=run, source="dataforseo")
         .exclude(payload__has_key="error")
         .order_by("pk")
     )
+    raw_fetches = [
+        raw for raw in candidate_fetches
+        if not dataforseo_response_is_declared_failure(raw.payload)
+    ]
+    failed_receipts = len(candidate_fetches) - len(raw_fetches)
+    if failed_receipts:
+        logger.warning(
+            "[Stage 2 -- NORMALISE] Skipping %s failed DataForSEO task receipt(s).",
+            failed_receipts,
+        )
     if not raw_fetches:
         raise RuntimeError(f"Run #{run.pk} has no DataForSEO RawFetch rows. Did INGEST run first?")
 
@@ -145,16 +208,21 @@ def run_stage_normalise(run: Run) -> dict:
     try:
         for raw in raw_fetches:
             endpoint = raw.endpoint
-            if "bulk_keyword_difficulty" in endpoint:
+            if "bulk_keyword_difficulty" in endpoint or "competitors_domain" in endpoint:
                 continue
-            if "keyword_ideas" in endpoint:
+            if any(name in endpoint for name in KEYWORD_DISCOVERY_ENDPOINTS):
                 rows = _parse_keyword_ideas(raw.payload, endpoint)
             elif "domain_intersection" in endpoint:
                 rows = _parse_domain_intersection(raw.payload, endpoint, raw.request_params.get("target1", ""))
             elif "relevant_pages" in endpoint:
                 rows = _parse_relevant_pages(raw.payload, endpoint, raw.request_params.get("target", ""))
             else:
-                raise PayloadStructureError(f"Unsupported DataForSEO endpoint in normalisation: {endpoint}")
+                logger.warning(
+                    "[Stage 2 -- NORMALISE] Skipping unknown endpoint %s "
+                    "(RawFetch #%s). No keyword data expected.",
+                    endpoint, raw.pk,
+                )
+                continue
 
             for row in rows:
                 keyword = (row.get("keyword") or "").strip()

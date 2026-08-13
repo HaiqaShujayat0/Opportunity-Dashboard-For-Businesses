@@ -11,8 +11,8 @@ from typing import List, Optional, Any, Dict
 
 
 # ---------------------------------------------------------------------------
-# 1. Keyword Ideas
-#    Endpoint: /v3/dataforseo_labs/google/keyword_ideas/live
+# 1. Keyword Discovery
+#    Shared by keyword_ideas, keyword_suggestions, and related_keywords.
 # ---------------------------------------------------------------------------
 class KeywordProperties(BaseModel):
     """Nested object inside KeywordIdeaItem — carries free clustering hints."""

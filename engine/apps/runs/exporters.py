@@ -21,7 +21,7 @@ TAB_NAMES = [
     "Archived",
 ]
 
-# Exactly 19 engine-owned columns. Google Sheets columns to the right are
+# Engine-owned columns. Google Sheets columns to the right are
 # human-owned and are carried forward only by Stage 9 merge-on-write.
 OPPORTUNITY_COLUMNS = [
     "Topic",
@@ -41,6 +41,7 @@ OPPORTUNITY_COLUMNS = [
     "Conversion Potential",
     "Competitor URL",
     "AI Search Opportunity",
+    "Estimated Impact",
     "Priority Score",
     "topic_uid",
 ]
@@ -88,6 +89,7 @@ REFERENCE_ROWS = [
     ["Conversion Potential", "High/Medium/Low commercial potential."],
     ["Competitor URL", "Best known competitor result, when available."],
     ["AI Search Opportunity", "Whether evidence supports AI-search targeting."],
+    ["Estimated Impact", "Estimated monthly incremental clicks and, when GA4 evidence exists, conversions."],
     ["Priority Score", "Deterministic 0-100 work-queue score."],
     ["topic_uid", "Hidden stable key used to preserve human edits across runs."],
     ["Human columns", "Columns 20 onward exist only in the live Google Sheet."],
@@ -134,6 +136,7 @@ def _opportunity_row(opportunity):
         opportunity.conversion_potential or "",
         opportunity.competitor_url or "",
         _sheet_value(opportunity.ai_search_opportunity),
+        _sheet_value(opportunity.estimated_impact),
         _sheet_value(opportunity.priority_score),
         opportunity.topic.topic_uid,
     ]
@@ -160,17 +163,32 @@ def _remap_rows(rows, destination_headers):
     return remapped
 
 
+def _human_headers(headers):
+    """Return columns after the stable engine-owned topic_uid boundary."""
+    headers = list(headers)
+    try:
+        boundary = headers.index("topic_uid") + 1
+    except ValueError:
+        boundary = min(ENGINE_COLUMN_COUNT, len(headers))
+    return [
+        header for header in headers[boundary:]
+        if header not in ARCHIVE_METADATA_COLUMNS
+    ]
+
+
 def _merge_actionable_rows(incoming_rows, existing_rows, existing_headers):
-    human_headers = list(existing_headers[ENGINE_COLUMN_COUNT:])
+    human_headers = _human_headers(existing_headers)
     merged = []
     incoming_uids = set()
     for engine_values in incoming_rows:
         uid = str(engine_values[-1])
         incoming_uids.add(uid)
         old_values = existing_rows.get(uid, [])
-        human_values = list(old_values[ENGINE_COLUMN_COUNT:])
-        if len(human_values) < len(human_headers):
-            human_values.extend([""] * (len(human_headers) - len(human_values)))
+        old_by_header = {
+            header: old_values[index] if index < len(old_values) else ""
+            for index, header in enumerate(existing_headers)
+        }
+        human_values = [old_by_header.get(header, "") for header in human_headers]
         merged.append(engine_values + human_values)
     stale = {
         uid: row for uid, row in existing_rows.items() if uid not in incoming_uids
@@ -180,11 +198,7 @@ def _merge_actionable_rows(incoming_rows, existing_rows, existing_headers):
 
 def _archive_rows(existing_archive, stale_rows, existing_headers, human_headers, now):
     archive_headers = list(existing_archive[0]) if existing_archive else []
-    previous_human_headers = [
-        header
-        for header in archive_headers[ENGINE_COLUMN_COUNT:]
-        if header not in ARCHIVE_METADATA_COLUMNS
-    ]
+    previous_human_headers = _human_headers(archive_headers)
     all_human_headers = list(dict.fromkeys(human_headers + previous_human_headers))
     output_headers = OPPORTUNITY_COLUMNS + all_human_headers + ARCHIVE_METADATA_COLUMNS
     output = [output_headers, *_remap_rows(existing_archive, output_headers)]

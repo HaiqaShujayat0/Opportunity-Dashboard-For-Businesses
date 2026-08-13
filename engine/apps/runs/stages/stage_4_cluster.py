@@ -9,6 +9,8 @@ from django.utils import timezone
 from apps.clients.models import Market
 from apps.ingestion.models import KeywordObservation, RawFetch
 from apps.runs.models import Run, RunStage
+from apps.runs.stages.stage_2_normalise import KEYWORD_DISCOVERY_ENDPOINTS
+from apps.runs.stages.settings_snapshot import engine_settings_for_market
 from apps.topics.models import Topic, TopicKeyword
 
 logger = logging.getLogger(__name__)
@@ -36,9 +38,10 @@ def _extract_core_keywords(run, market):
         run=run,
         market=market,
         source="dataforseo",
-        endpoint__contains="keyword_ideas",
     ).exclude(payload__has_key="error")
     for raw in fetches:
+        if not any(name in raw.endpoint for name in KEYWORD_DISCOVERY_ENDPOINTS):
+            continue
         try:
             items = raw.payload["tasks"][0]["result"][0]["items"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -48,8 +51,12 @@ def _extract_core_keywords(run, market):
         if not isinstance(items, list):
             raise ValueError(f"Malformed keyword_ideas items in RawFetch #{raw.pk}")
         for item in items:
-            keyword = (item.get("keyword") or "").lower().strip()
-            core = ((item.get("keyword_properties") or {}).get("core_keyword") or "").lower().strip()
+            keyword_data = item.get("keyword_data") or item
+            keyword = (keyword_data.get("keyword") or "").lower().strip()
+            core = (
+                (keyword_data.get("keyword_properties") or {}).get("core_keyword")
+                or ""
+            ).lower().strip()
             if keyword and core:
                 core_map[keyword] = core
     return core_map
@@ -67,7 +74,9 @@ def _aggregate_keywords(observations):
             "search_volume": obs.search_volume or 0,
             "keyword_difficulty": obs.keyword_difficulty,
             "intent": obs.intent or "",
+            "serp_urls": set(),
         })
+        entry["serp_urls"].update(obs.serp_top_urls or [])
         if (obs.search_volume or 0) > entry["search_volume"]:
             entry["search_volume"] = obs.search_volume or 0
             entry["keyword"] = obs.keyword
@@ -78,7 +87,7 @@ def _aggregate_keywords(observations):
     return data
 
 
-def _cluster_keywords(keyword_data, core_map, threshold):
+def _cluster_keywords(keyword_data, core_map, threshold, serp_overlap_threshold=3):
     clusters = {}
     keyword_to_cluster = {}
     for norm in keyword_data:
@@ -95,6 +104,10 @@ def _cluster_keywords(keyword_data, core_map, threshold):
                 keyword_to_cluster[core] = cluster_id
 
     tokens = {cid: set().union(*(_tokenize(k) for k in members)) for cid, members in clusters.items()}
+    serp_urls = {
+        cid: set().union(*(keyword_data[keyword]["serp_urls"] for keyword in members))
+        for cid, members in clusters.items()
+    }
     merged = True
     while merged:
         merged = False
@@ -103,9 +116,14 @@ def _cluster_keywords(keyword_data, core_map, threshold):
             for second in ids[position + 1:]:
                 if first not in clusters or second not in clusters:
                     continue
-                if _jaccard(tokens[first], tokens[second]) >= threshold:
+                shared_serp_urls = serp_urls[first] & serp_urls[second]
+                if (
+                    len(shared_serp_urls) >= serp_overlap_threshold
+                    or _jaccard(tokens[first], tokens[second]) >= threshold
+                ):
                     clusters[first].update(clusters.pop(second))
                     tokens[first].update(tokens.pop(second))
+                    serp_urls[first].update(serp_urls.pop(second))
                     merged = True
     return list(clusters.values())
 
@@ -133,18 +151,15 @@ def _persist_market_topics(run, market, keyword_data, clusters):
             "intent": dominant_intent,
             "last_seen_run": run,
         }
-        topic, created = Topic.objects.get_or_create(
+        topic, created = Topic.objects.update_or_create(
             topic_uid=uid,
-            defaults={**defaults, "first_seen_run": run},
+            defaults=defaults,
         )
         if created:
+            topic.first_seen_run = run
+            topic.save(update_fields=["first_seen_run"])
             topics_created += 1
         else:
-            if topic.client_id != market.client_id or topic.market_id != market.id:
-                raise ValueError(f"Stable topic UID collision for {uid}")
-            for field, value in defaults.items():
-                setattr(topic, field, value)
-            topic.save(update_fields=[*defaults.keys(), "updated_at"])
             topics_updated += 1
         topic.keywords.all().delete()
         TopicKeyword.objects.bulk_create([
@@ -177,13 +192,21 @@ def run_stage_cluster(run, similarity_threshold=0.35):
     try:
         market_ids = observations.values_list("market_id", flat=True).distinct()
         for market in Market.objects.filter(id__in=market_ids).select_related("client"):
+            settings = engine_settings_for_market(run, market.code)
+            serp_overlap_threshold = int(
+                settings.get("serp_overlap_threshold", 3)
+            )
+            semantic_similarity_threshold = float(
+                settings.get("semantic_similarity_threshold", similarity_threshold)
+            )
             market_observations = observations.filter(market=market)
             keyword_data = _aggregate_keywords(market_observations)
             unique_count += len(keyword_data)
             clusters = _cluster_keywords(
                 keyword_data,
                 _extract_core_keywords(run, market),
-                similarity_threshold,
+                semantic_similarity_threshold,
+                serp_overlap_threshold,
             ) if keyword_data else []
             market_created, market_updated, market_assignments = _persist_market_topics(
                 run, market, keyword_data, clusters
@@ -194,6 +217,8 @@ def run_stage_cluster(run, similarity_threshold=0.35):
             market_summaries[market.code] = {
                 "unique_keywords": len(keyword_data),
                 "topics": len(clusters),
+                "serp_overlap_threshold": serp_overlap_threshold,
+                "semantic_similarity_threshold": semantic_similarity_threshold,
             }
     except Exception as exc:
         stage.status = "failed"

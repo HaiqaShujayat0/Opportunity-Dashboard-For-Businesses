@@ -45,6 +45,7 @@ from django.conf import settings as django_settings
 
 from apps.ingestion.models import RawFetch, KeywordObservation
 from apps.runs.models import Run, RunStage
+from apps.runs.stages.stage_2_normalise import KEYWORD_DISCOVERY_ENDPOINTS
 
 logger = logging.getLogger(__name__)
 
@@ -71,13 +72,13 @@ def _get_difficulty_label(score):
 
 
 # -----------------------------------------------------------------------
-# Intent extraction -- pulls intent from the raw keyword_ideas payload
+# Intent extraction -- pulls intent from all raw keyword-discovery payloads
 # -----------------------------------------------------------------------
 def _extract_intents_from_raw(run):
     """
-    DataForSEO already gives us search intent in the keyword_ideas
-    response (inside search_intent_info.main_intent). We just need
-    to read it from the saved RawFetch and map it to our keywords.
+    DataForSEO gives us search intent in the ideas, suggestions, and related
+    keyword responses (inside search_intent_info.main_intent). We read it
+    from saved RawFetch rows and map it to our keywords.
 
     Returns a dict: { "keyword_text": "transactional", ... }
     """
@@ -86,10 +87,11 @@ def _extract_intents_from_raw(run):
     raw_fetches = RawFetch.objects.filter(
         run=run,
         source="dataforseo",
-        endpoint__contains="keyword_ideas",
     ).exclude(payload__has_key="error")
 
     for raw in raw_fetches:
+        if not any(name in raw.endpoint for name in KEYWORD_DISCOVERY_ENDPOINTS):
+            continue
         try:
             items = raw.payload["tasks"][0]["result"][0]["items"]
             for item in items:

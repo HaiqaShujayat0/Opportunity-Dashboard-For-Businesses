@@ -13,6 +13,87 @@ from apps.connectors.dataforseo.schemas import (
 
 logger = logging.getLogger(__name__)
 
+
+class DataForSEOResponseError(RuntimeError):
+    """DataForSEO accepted the HTTP request but rejected an API task."""
+
+
+def validate_dataforseo_response(response: Dict[str, Any], endpoint: str) -> None:
+    """Reject root/task-level API failures before downstream parsing."""
+    if not isinstance(response, dict):
+        raise DataForSEOResponseError(
+            f"DataForSEO returned a non-object response for {endpoint}."
+        )
+    root_code = response.get("status_code")
+    if root_code is not None and root_code != 20000:
+        raise DataForSEOResponseError(
+            f"DataForSEO request failed for {endpoint}: "
+            f"{root_code} {response.get('status_message', 'Unknown error')}"
+        )
+    tasks = response.get("tasks")
+    if not isinstance(tasks, list) or not tasks:
+        raise DataForSEOResponseError(
+            f"DataForSEO response for {endpoint} contains no tasks."
+        )
+    for task in tasks:
+        if not isinstance(task, dict):
+            raise DataForSEOResponseError(
+                f"DataForSEO response for {endpoint} contains a malformed task."
+            )
+        task_code = task.get("status_code")
+        if task_code is not None and task_code != 20000:
+            raise DataForSEOResponseError(
+                f"DataForSEO task failed for {endpoint}: "
+                f"{task_code} {task.get('status_message', 'Unknown error')}"
+            )
+        if task.get("result") is None:
+            raise DataForSEOResponseError(
+                f"DataForSEO task returned no result for {endpoint}."
+            )
+
+
+def dataforseo_response_is_successful(response: Dict[str, Any], endpoint: str) -> bool:
+    try:
+        validate_dataforseo_response(response, endpoint)
+    except DataForSEOResponseError:
+        return False
+    return True
+
+
+def dataforseo_response_is_declared_failure(response: Dict[str, Any]) -> bool:
+    """Return True only for an explicit provider root/task error code."""
+    if not isinstance(response, dict):
+        return False
+    root_code = response.get("status_code")
+    if root_code is not None and root_code != 20000:
+        return True
+    tasks = response.get("tasks")
+    if not isinstance(tasks, list):
+        return False
+    return any(
+        isinstance(task, dict)
+        and task.get("status_code") is not None
+        and task.get("status_code") != 20000
+        for task in tasks
+    )
+
+
+def _keyword_item(item: Dict[str, Any]) -> KeywordIdeaItem:
+    """Flatten suggestion and related-keyword response variants."""
+    data = item.get("keyword_data") or item
+    keyword_info = data.get("keyword_info") or {}
+    keyword_properties = data.get("keyword_properties") or {}
+    return KeywordIdeaItem(
+        keyword=data.get("keyword") or "",
+        search_volume=keyword_info.get("search_volume"),
+        cpc=keyword_info.get("cpc"),
+        competition=keyword_info.get("competition"),
+        competition_level=keyword_info.get("competition_level"),
+        keyword_difficulty=keyword_properties.get("keyword_difficulty"),
+        keyword_properties=keyword_properties or None,
+        monthly_searches=keyword_info.get("monthly_searches"),
+    )
+
 class DataForSEOConnector(BaseConnector):
     """
     The DataForSEO Database Hook.
@@ -31,6 +112,15 @@ class DataForSEOConnector(BaseConnector):
 
         # 1. Check cache first — if we paid for this already, don't pay again
         cached = self._check_cache(endpoint, params, ttl_hours=24)
+        if cached and not dataforseo_response_is_successful(
+            cached.payload, endpoint
+        ):
+            logger.warning(
+                "Ignoring failed DataForSEO cache receipt %s for %s",
+                cached.pk,
+                endpoint,
+            )
+            cached = None
         if cached:
             # Bugfix: If the cache hit is from an older Run, we MUST duplicate
             # the RawFetch row for the *current* Run. Otherwise, downstream
@@ -54,12 +144,16 @@ class DataForSEOConnector(BaseConnector):
             # 4. Permanently save to database
             self._log_fetch(endpoint, params, raw_response, cost_usd=cost)
 
+            validate_dataforseo_response(raw_response, endpoint)
             return raw_response
 
         except Exception as e:
-            logger.exception(f"DataForSEO API failed for endpoint: {endpoint}")
             # Save the error too — we need an audit trail of failures
-            self._log_fetch(endpoint, params, {"error": str(e)}, cost_usd=0)
+            if "raw_response" not in locals():
+                logger.exception(
+                    f"DataForSEO transport failed for endpoint: {endpoint}"
+                )
+                self._log_fetch(endpoint, params, {"error": str(e)}, cost_usd=0)
             raise
 
     def get_keyword_ideas(self, keywords: List[str], limit: int = 100) -> List[KeywordIdeaItem]:
@@ -74,6 +168,38 @@ class DataForSEOConnector(BaseConnector):
         raw_response = self._execute_and_log(endpoint, payload)
         items = self.client._extract_items(raw_response)
         return [KeywordIdeaItem(**item) for item in items]
+
+    def get_keyword_suggestions(
+        self, keyword: str, limit: int = 100
+    ) -> List[KeywordIdeaItem]:
+        """Discover close expansions for one seed (live API requirement)."""
+        endpoint = "/dataforseo_labs/google/keyword_suggestions/live"
+        payload = [{
+            "keyword": keyword,
+            "location_code": self.market.dataforseo_location_code,
+            "language_name": "English",
+            "limit": limit,
+        }]
+
+        raw_response = self._execute_and_log(endpoint, payload)
+        items = self.client._extract_items(raw_response)
+        return [_keyword_item(item) for item in items]
+
+    def get_related_keywords(
+        self, keyword: str, limit: int = 100
+    ) -> List[KeywordIdeaItem]:
+        """Discover related searches for one seed (live API requirement)."""
+        endpoint = "/dataforseo_labs/google/related_keywords/live"
+        payload = [{
+            "keyword": keyword,
+            "location_code": self.market.dataforseo_location_code,
+            "language_name": "English",
+            "limit": limit,
+        }]
+
+        raw_response = self._execute_and_log(endpoint, payload)
+        items = self.client._extract_items(raw_response)
+        return [_keyword_item(item) for item in items]
         
     def get_competitor_domains(self, target_domain: str, limit: int = 10) -> List[CompetitorDomainItem]:
         endpoint = "/dataforseo_labs/google/competitors_domain/live"

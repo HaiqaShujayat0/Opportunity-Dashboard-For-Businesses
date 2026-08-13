@@ -14,6 +14,7 @@ from apps.connectors.gsc.schemas import GSCSearchAnalyticsResponse
 from apps.ingestion.models import KeywordObservation, RawFetch
 from apps.pages.models import ExistingPage, PositionSnapshot
 from apps.runs.models import Run, RunStage
+from apps.runs.stages.settings_snapshot import engine_settings_for_market
 
 
 class AnalyticsPayloadError(ValueError):
@@ -24,16 +25,16 @@ def _normalise_keyword(keyword: str) -> str:
     return " ".join(keyword.lower().strip().split())
 
 
-def _quick_win_range(run: Run) -> tuple[float, float]:
-    settings = (run.settings_snapshot or {}).get("engine_settings", {})
+def _quick_win_range(run: Run, market_code: str) -> tuple[float, float]:
+    settings = engine_settings_for_market(run, market_code)
     return (
         float(settings.get("quick_win_min_position", 7.0)),
         float(settings.get("quick_win_max_position", 20.0)),
     )
 
 
-def _decay_settings(run: Run) -> dict:
-    settings = (run.settings_snapshot or {}).get("engine_settings", {})
+def _decay_settings(run: Run, market_code: str) -> dict:
+    settings = engine_settings_for_market(run, market_code)
     return {
         "baseline_max": float(settings.get("decay_baseline_max_position", 5.0)),
         "current_min": float(settings.get("decay_current_min_position", 5.0)),
@@ -106,8 +107,6 @@ def _normalise_gsc(run: Run, fetches: list[RawFetch]) -> dict:
             page["keywords"].add(normalised)
 
     created_snapshots = updated_snapshots = created_observations = updated_observations = 0
-    quick_win_min, quick_win_max = _quick_win_range(run)
-    decay = _decay_settings(run)
     with transaction.atomic():
         for market, row, normalised in snapshots:
             _, created = PositionSnapshot.objects.update_or_create(
@@ -129,6 +128,10 @@ def _normalise_gsc(run: Run, fetches: list[RawFetch]) -> dict:
             updated_snapshots += int(not created)
 
         for (_, normalised, page_url), item in observations.items():
+            quick_win_min, quick_win_max = _quick_win_range(
+                run, item["market"].code
+            )
+            decay = _decay_settings(run, item["market"].code)
             position = item["weighted_position"] / item["position_weight"]
             previous_position = _baseline_position(
                 item["market"], normalised, page_url, min(item["dates"]), decay["baseline_days"]
