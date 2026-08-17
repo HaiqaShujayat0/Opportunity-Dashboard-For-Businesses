@@ -12,6 +12,7 @@ click-repl==0.3.0
 colorama==0.4.6
 Django==5.2.17
 django-environ==0.14.0
+django-unfold==0.104.1
 djangorestframework==3.17.2
 google-auth==2.40.3
 gspread==6.2.1
