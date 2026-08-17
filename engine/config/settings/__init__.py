@@ -76,6 +76,7 @@ ALLOWED_HOSTS = []
 # Application definition
 
 INSTALLED_APPS = [
+    'unfold',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -176,4 +177,9 @@ MAILERS = {
     'default': {
         'BACKEND': 'django.core.mail.backends.console.EmailBackend',
     },
+}
+
+UNFOLD = {
+    "SITE_TITLE": "Engine 1 Admin",
+    "SITE_HEADER": "Engine 1",
 }

@@ -27,9 +27,24 @@ class Market(models.Model):
     language_code = models.CharField(max_length=5)       # e.g., "en", "de"
     
     # API specific configurations for this market
-    dataforseo_location_code = models.IntegerField()     # e.g., 2826 = United Kingdom
-    gsc_property = models.CharField(max_length=255)      # sc-domain:... or URL prefix
-    ga4_property_id = models.CharField(max_length=50, blank=True)
+    dataforseo_location_code = models.IntegerField(
+        help_text=(
+            "DataForSEO location code, e.g. 2826 for United Kingdom. See "
+            "https://docs.dataforseo.com/v3/appendix/google/locations/"
+        )
+    )
+    gsc_property = models.CharField(
+        max_length=255,
+        help_text=(
+            "Exact property string from Google Search Console. Domain properties: "
+            "sc-domain:example.com — URL prefix: https://example.com/"
+        ),
+    )
+    ga4_property_id = models.CharField(
+        max_length=50,
+        blank=True,
+        help_text="Leave blank to skip GA4 data. Format: 123456789",
+    )
     sitemap_url = models.URLField()
     url_pattern = models.CharField(max_length=255, blank=True)  # "/de/" or subdomain
     is_active = models.BooleanField(default=True)

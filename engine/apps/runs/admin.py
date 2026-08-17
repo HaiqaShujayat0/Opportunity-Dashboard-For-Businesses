@@ -1,5 +1,6 @@
 from django.contrib import admin, messages
 from django.http import HttpResponse
+from unfold.admin import ModelAdmin, TabularInline
 
 from apps.runs.exporters import generate_csv, generate_excel
 from apps.runs.tasks import run_pipeline_async
@@ -73,17 +74,82 @@ def run_pipeline_in_background(modeladmin, request, queryset):
     )
 
 @admin.register(Run)
-class RunAdmin(admin.ModelAdmin):
-    list_display = ("id", "client", "run_type", "status", "started_at", "total_cost_usd")
+class RunAdmin(ModelAdmin):
+    list_display = (
+        "id",
+        "client",
+        "run_type",
+        "status",
+        "started_at",
+        "finished_at",
+        "total_cost_usd",
+        "error",
+    )
     list_filter = ("status", "run_type", "client")
     search_fields = ("client__name",)
-    readonly_fields = ("created_at", "total_cost_usd", "started_at", "finished_at")
+    readonly_fields = (
+        "status",
+        "settings_snapshot",
+        "sheet_url",
+        "error",
+        "started_at",
+        "finished_at",
+        "total_cost_usd",
+        "created_at",
+    )
+    fieldsets = (
+        (
+            "Run Configuration",
+            {
+                "fields": (
+                    "client",
+                    "run_type",
+                    "markets",
+                    "seed_keywords",
+                    "competitor_domains",
+                ),
+                "description": "Fields required to start a new pipeline run.",
+            },
+        ),
+        (
+            "Pipeline Outputs (Read-Only)",
+            {
+                "fields": (
+                    "status",
+                    "settings_snapshot",
+                    "sheet_url",
+                    "error",
+                    "started_at",
+                    "finished_at",
+                    "total_cost_usd",
+                )
+            },
+        ),
+    )
     actions = [
         download_opportunities_csv,
         download_run_xlsx,
         run_pipeline_in_background,
     ]
+
+
 @admin.register(RunStage)
-class RunStageAdmin(admin.ModelAdmin):
+class RunStageAdmin(ModelAdmin):
     list_display = ("run", "name", "status", "records_in", "records_out")
     list_filter = ("status", "name")
+    readonly_fields = (
+        "run",
+        "name",
+        "status",
+        "records_in",
+        "records_out",
+        "started_at",
+        "finished_at",
+        "error",
+    )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False

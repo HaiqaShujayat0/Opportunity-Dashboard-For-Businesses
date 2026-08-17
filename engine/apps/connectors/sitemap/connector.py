@@ -109,7 +109,7 @@ class SitemapConnector(BaseConnector):
                     "url": record["url"],
                     "last_modified": record["last_modified"].isoformat() if record["last_modified"] else None,
                 } for record in records],
-            }
+            } 
             self._log_fetch(url, params, payload, cost_usd=0)
             return payload
         except Exception as exc:

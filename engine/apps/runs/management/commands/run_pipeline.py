@@ -17,8 +17,10 @@ Example:
 """
 import logging
 from django.core.management.base import BaseCommand, CommandError
+from django.db.models import Sum
 from django.utils import timezone
 
+from apps.ingestion.models import RawFetch
 from apps.runs.models import Run
 from apps.runs.stages.stage_0_plan import run_stage_plan
 from apps.runs.stages.stage_1_ingest import run_stage_ingest
@@ -278,7 +280,18 @@ class Command(BaseCommand):
             run.status = "partial" if had_partial_stage else "complete"
             run.finished_at = timezone.now()
             run.error = "" if not had_partial_stage else "One or more ingestion markets failed; inspect RunStage records."
-            run.save(update_fields=["status", "finished_at", "error"])
+            cost_agg = RawFetch.objects.filter(run=run).aggregate(
+                total=Sum("cost_usd")
+            )
+            run.total_cost_usd = cost_agg["total"] or 0
+            run.save(
+                update_fields=[
+                    "status",
+                    "finished_at",
+                    "error",
+                    "total_cost_usd",
+                ]
+            )
 
             self.stdout.write(self.style.SUCCESS(
                 f"\n{'='*60}"
@@ -293,7 +306,18 @@ class Command(BaseCommand):
             run.status = "failed"
             run.finished_at = timezone.now()
             run.error = str(e)
-            run.save(update_fields=["status", "finished_at", "error"])
+            cost_agg = RawFetch.objects.filter(run=run).aggregate(
+                total=Sum("cost_usd")
+            )
+            run.total_cost_usd = cost_agg["total"] or 0
+            run.save(
+                update_fields=[
+                    "status",
+                    "finished_at",
+                    "error",
+                    "total_cost_usd",
+                ]
+            )
 
             self.stdout.write(self.style.ERROR(
                 f"\n[FAILED] Pipeline failed for Run #{run.pk}\n"

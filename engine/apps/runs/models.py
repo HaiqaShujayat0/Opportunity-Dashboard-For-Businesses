@@ -42,11 +42,17 @@ class Run(models.Model):
     # --- What this run will process ---
     markets = models.JSONField(
         default=list,
-        help_text='List of market codes to include, e.g. ["UK", "DE"]',
+        help_text=(
+            'JSON array of market codes, e.g. ["UK"] or ["UK","US"]. Codes must '
+            "match Market.code values for this client."
+        ),
     )
     seed_keywords = models.TextField(
         blank=True,
-        help_text="Comma-separated seed keywords for DataForSEO keyword research.",
+        help_text=(
+            "Comma-separated list of seed keywords, e.g. running shoes, trail shoes, "
+            "minimalist running"
+        ),
     )
     competitor_domains = models.TextField(
         blank=True,
